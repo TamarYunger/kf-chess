@@ -109,7 +109,7 @@ def test_jump_intercepts_a_move_of_the_opposite_color():
 
 
 def test_pawn_promotion_on_arrival():
-    # white pawn one step from the last rank (row 0)
+    # הכתרה מושבתת כרגע: חייל שמגיע לשורה האחרונה נשאר חייל (לא מוכתר למלכה)
     rows = [[".", ".", "."], ["wP", ".", "."], [".", ".", "."]]
     engine, board = make_engine(rows)
 
@@ -117,7 +117,7 @@ def test_pawn_promotion_on_arrival():
     engine.handle_click(*cell_to_pixel(0, 0))
     engine.wait(settings.MOVE_DURATION)
 
-    assert board.get(0, 0) == "wQ"
+    assert board.get(0, 0) == "wP"
 
 
 def test_injected_promotion_rule_overrides_default_behaviour():

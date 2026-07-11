@@ -109,7 +109,6 @@ class GameEngine:
         if not self._is_legal_move(piece, start, cell):
             return  # illegal target: keep current selection
 
-        self._board.set(*start, self._config.EMPTY_CELL)
         self._active_moves.append(Move(piece, start, cell, self._arrival_clock(start, cell)))
         self._selected = None
     def _arrival_clock(self, start, end):
@@ -166,6 +165,10 @@ class GameEngine:
         # To re-enable, restore the promote() call below and drop the line after it.
         # piece = self._promotion_rule.promote(move.piece, r, self._board.height)
         piece = move.piece
+         # The piece stays visible at its source while in flight; it leaves the
+        # source only now, on arrival. (If intercepted or blocked by the checks
+        # above, it never moves and survives at the source.)
+        self._board.set(*move.start, self._config.EMPTY_CELL)
         self._board.set(r, c, piece)
 
     def _is_intercepted(self, move):

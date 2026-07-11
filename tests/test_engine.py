@@ -56,8 +56,7 @@ def test_selecting_then_moving_starts_a_move():
     engine.handle_click(*cell_to_pixel(0, 2))
 
     assert engine.selected is None
-    assert board.is_empty(0, 0)  # piece has left the source immediately
-
+    assert board.get(0, 0) == "wR"  # piece stays at the source until it arrives
 
 def test_move_lands_after_move_duration_elapses():
     engine, board = make_engine([["wR", ".", "."], [".", ".", "."], [".", ".", "."]])

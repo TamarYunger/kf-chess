@@ -159,7 +159,10 @@ class GameEngine:
         if self._win_condition.is_game_over(captured):
             self._game_over = True
 
-        piece = self._promotion_rule.promote(move.piece, r, self._board.height)
+        # Promotion is disabled: a pawn reaching the last rank stays a pawn.
+        # To re-enable, restore the promote() call below and drop the line after it.
+        # piece = self._promotion_rule.promote(move.piece, r, self._board.height)
+        piece = move.piece
         self._board.set(r, c, piece)
 
     def _is_intercepted(self, move):

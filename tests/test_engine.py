@@ -65,7 +65,8 @@ def test_move_lands_after_move_duration_elapses():
     engine.handle_click(*cell_to_pixel(0, 2))
 
     engine.wait(settings.MOVE_DURATION)
-    assert board.get(0, 2) == "wR"
+    # A two-square move takes two move-durations to arrive.
+    engine.wait(2 * settings.MOVE_DURATION)
 
 
 def test_illegal_move_keeps_selection_and_piece_in_place():
@@ -82,7 +83,7 @@ def test_king_capture_ends_the_game():
     engine, board = make_engine(rows)
     engine.handle_click(*cell_to_pixel(0, 0))
     engine.handle_click(*cell_to_pixel(0, 2))
-    engine.wait(settings.MOVE_DURATION)
+    engine.wait(2 * settings.MOVE_DURATION)
 
     assert engine.game_over is True
 
@@ -92,20 +93,22 @@ def test_injected_win_condition_overrides_default_behaviour():
     engine, board = make_engine(rows, win_condition=NeverEndsWinCondition())
     engine.handle_click(*cell_to_pixel(0, 0))
     engine.handle_click(*cell_to_pixel(0, 2))
-    engine.wait(settings.MOVE_DURATION)
+    engine.wait(2 * settings.MOVE_DURATION)
 
     assert engine.game_over is False
 
 
 def test_jump_intercepts_a_move_of_the_opposite_color():
-    rows = [["wR", ".", "bP"], [".", ".", "."], [".", ".", "."]]
+    # bP is adjacent so the one-square move (1000) and the jump (1000) land
+    # together; otherwise the jump would expire before the move arrives.
+    rows = [["wR", "bP", "."], [".", ".", "."], [".", ".", "."]]
     engine, board = make_engine(rows)
     engine.handle_click(*cell_to_pixel(0, 0))
-    engine.handle_click(*cell_to_pixel(0, 2))
-    engine.handle_jump(*cell_to_pixel(0, 2))
+    engine.handle_click(*cell_to_pixel(0, 1))
+    engine.handle_jump(*cell_to_pixel(0, 1))
 
     engine.wait(settings.JUMP_DURATION)
-    assert board.get(0, 2) == "bP"  # move was intercepted, target unchanged
+    assert board.get(0, 1) == "bP"  # move was intercepted, target unchanged
 
 
 def test_pawn_promotion_on_arrival():

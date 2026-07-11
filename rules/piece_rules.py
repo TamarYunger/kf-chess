@@ -61,18 +61,25 @@ class KnightMovement(MovementStrategy):
 
 
 class PawnMovement(MovementStrategy):
-    """Pawn behaviour depends on per-color direction/start-row config,
-    which is injected rather than hardcoded, so board layouts or custom
-    variants can change it without editing this class.
+    """Pawn movement rule.
+
+    The per-color advance direction is injected (so variants can flip it),
+    while the rank a pawn may double-step from is derived from the board
+    height rather than hardcoded - so a single instance works for any
+    board size.
     """
 
-    def __init__(self, directions, start_rows):
+    def __init__(self, directions):
         self._directions = directions
-        self._start_rows = start_rows
+    
+    def _home_row(self, direction, board):
+        """The rank a pawn may double-step from: the far edge it faces away
+        from. Derived from board height, so any board size works."""
+        return 0 if direction > 0 else board.height - 1
 
     def is_legal(self, dr, dc, context):
         direction = self._directions[context.color]
-        start_row = self._start_rows[context.color]
+        start_row = self._home_row(direction, context.board)
         sr, _sc = context.start
 
         if dc == 0:

@@ -50,5 +50,5 @@ def build_default_registry(config):
     registry.register("R", RookMovement())
     registry.register("B", BishopMovement())
     registry.register("N", KnightMovement())
-    registry.register("P", PawnMovement(config.PAWN_DIRECTION, config.PAWN_START_ROW))
+    registry.register("P", PawnMovement(config.PAWN_DIRECTION))
     return registry

@@ -51,15 +51,15 @@ main.py    entry point + dependency wiring
    config) as constructor/function arguments, so tests substitute fakes
    (see `tests/test_engine.py`) instead of monkeypatching.
 
-## Known open item
+## Pawn double-step
 
-The original code set pawn double-step eligibility with
-`start_row = 1 if color == "w" else 6`, which was flagged as uncertain in
-a comment (pawns are placed on row 6 for white in the sample board, so a
-double step from row 1 doesn't actually apply to them). This has been
-preserved as-is in `config.PAWN_START_ROW = {"w": 1, "b": 6}` rather than
-silently changed - flip the values there if white's double-step should
-work from row 6 instead.
+A pawn may take a two-square opening move only from its home rank. Rather
+than store that rank as a fixed constant, `PawnMovement` derives it from
+the board height: `0` for a color that moves downward and `height - 1` for
+one that moves upward. The same rule therefore holds on any board size -
+an 8x8 board (white's home rank is row 7) or a 4-row board (row 3) alike.
+Only the per-color advance direction stays configurable, in
+`config.PAWN_DIRECTION`.
 
 ## Running tests
 

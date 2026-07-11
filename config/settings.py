@@ -24,3 +24,9 @@ PAWN_DIRECTION = {"w": -1, "b": 1}
 
 # Token used to represent an empty cell on the board
 EMPTY_CELL = "."
+
+# Gameplay policy: may several moves be in flight at the same time?
+# The real-time variant resolves a contested route in favour of whoever
+# started first, so only one move is allowed at a time (default False).
+# Set True to re-enable concurrent moves.
+ALLOW_CONCURRENT_MOVES = False

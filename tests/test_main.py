@@ -25,6 +25,7 @@ def test_run_accepts_injected_config(capsys):
         COLORS=("w", "b"),
         PAWN_DIRECTION={"w": -1, "b": 1},
         EMPTY_CELL=".",
+        ALLOW_CONCURRENT_MOVES=False,
     )
     lines = ["Board:", "wK . bK", "Commands:", "print"]
     main_module.run(lines, config=custom_config)

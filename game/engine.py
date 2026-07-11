@@ -110,11 +110,14 @@ class GameEngine:
             return  # illegal target: keep current selection
 
         self._board.set(*start, self._config.EMPTY_CELL)
-        self._active_moves.append(
-            Move(piece, start, cell, self._clock + self._config.MOVE_DURATION)
-        )
+        self._active_moves.append(Move(piece, start, cell, self._arrival_clock(start, cell)))
         self._selected = None
-
+    def _arrival_clock(self, start, end):
+       """A move takes MOVE_DURATION per square travelled; distance is the
+       number of squares on a straight/diagonal path (Chebyshev metric)."""
+       distance = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
+       return self._clock + distance * self._config.MOVE_DURATION
+    
     def _is_legal_move(self, piece, start, end):
         strategy = self._registry.get(piece[1])
         dr, dc = end[0] - start[0], end[1] - start[1]

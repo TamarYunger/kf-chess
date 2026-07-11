@@ -24,7 +24,6 @@ def test_run_accepts_injected_config(capsys):
         JUMP_DURATION=10,
         COLORS=("w", "b"),
         PAWN_DIRECTION={"w": -1, "b": 1},
-        PAWN_START_ROW={"w": 1, "b": 6},
         EMPTY_CELL=".",
     )
     lines = ["Board:", "wK . bK", "Commands:", "print"]

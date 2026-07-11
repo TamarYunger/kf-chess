@@ -108,10 +108,11 @@ def test_jump_intercepts_a_move_of_the_opposite_color():
 
     engine.wait(settings.JUMP_DURATION)
     assert board.get(0, 1) == "bP"  # move was intercepted, target unchanged
+    assert board.is_empty(0, 0)  # the intercepted piece is captured mid-flight
 
 
 def test_pawn_promotion_on_arrival():
-    # הכתרה מושבתת כרגע: חייל שמגיע לשורה האחרונה נשאר חייל (לא מוכתר למלכה)
+    # white pawn one step from the last rank (row 0) is promoted to a queen
     rows = [[".", ".", "."], ["wP", ".", "."], [".", ".", "."]]
     engine, board = make_engine(rows)
 
@@ -119,7 +120,7 @@ def test_pawn_promotion_on_arrival():
     engine.handle_click(*cell_to_pixel(0, 0))
     engine.wait(settings.MOVE_DURATION)
 
-    assert board.get(0, 0) == "wP"
+    assert board.get(0, 0) == "wQ"
 
 
 def test_injected_promotion_rule_overrides_default_behaviour():

@@ -71,12 +71,19 @@ def test_pawn_single_step_forward():
 
 
 def test_pawn_double_step_requires_clear_path_and_start_row():
-    # White's home rank on an 8x8 board is the bottom edge (row 7 = height-1).
     board = empty_board()
     pawn = PawnMovement({"w": -1, "b": 1})
-    assert pawn.is_legal(-2, 0, context(board, "w", (7, 4), (5, 4)))
+    # white's home row is one square in front of its back rank (row 6 on
+    # an 8-row board), matching standard chess - not the back rank itself.
+    assert pawn.is_legal(-2, 0, context(board, "w", (6, 4), (4, 4)))
 
-    board.set(6, 4, "bP")
+    board.set(5, 4, "bP")
+    assert not pawn.is_legal(-2, 0, context(board, "w", (6, 4), (4, 4)))
+
+
+def test_pawn_double_step_rejected_from_back_rank():
+    board = empty_board()
+    pawn = PawnMovement({"w": -1, "b": 1})
     assert not pawn.is_legal(-2, 0, context(board, "w", (7, 4), (5, 4)))
 
 

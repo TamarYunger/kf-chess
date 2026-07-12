@@ -1,7 +1,7 @@
 import pytest
 
 from config import settings
-from game.parser import parse_input, build_board, BoardParseError
+from board_io.parser import parse_input, build_board, BoardParseError
 from rules.rule_registry import build_default_registry
 
 

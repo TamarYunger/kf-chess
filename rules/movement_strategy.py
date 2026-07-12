@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from board.board_interface import BoardRepresentation
+
 
 @dataclass(frozen=True)
 class MoveContext:
@@ -11,7 +13,7 @@ class MoveContext:
     changing every call site.
     """
 
-    board: object  # BoardRepresentation
+    board: BoardRepresentation  # BoardRepresentation
     color: str
     start: tuple
     end: tuple

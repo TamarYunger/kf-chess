@@ -6,10 +6,14 @@ import sys
 
 from config import settings
 from rules.rule_registry import build_default_registry
+from rules.rule_engine import RuleEngine
 from rules.game_conditions import KingCaptureWinCondition, LastRankPromotion
-from game.parser import parse_input, build_board, BoardParseError
+from board_io.parser import parse_input, build_board, BoardParseError
+from game.board_mapper import BoardMapper
+from realtime.real_time_arbiter import RealTimeArbiter
 from game.engine import GameEngine
-from game.renderer import BoardRenderer
+from game.controller import Controller
+from board_io.board_printer import BoardPrinter
 
 
 def run(input_lines, config=settings):
@@ -26,29 +30,35 @@ def run(input_lines, config=settings):
         print("ERROR", error)
         return
 
-    engine = GameEngine(
+    real_time_arbiter = RealTimeArbiter(
         board=board,
-        rule_registry=registry,
         win_condition=KingCaptureWinCondition(),
         promotion_rule=LastRankPromotion(),
         config=config,
     )
-    renderer = BoardRenderer()
+    engine = GameEngine(
+        board=board,
+        rule_engine=RuleEngine(registry, config),
+        real_time_arbiter=real_time_arbiter,
+        config=config,
+    )
+    controller = Controller(engine, BoardMapper(board, config.CELL_SIZE))
+    renderer = BoardPrinter(config.EMPTY_CELL)
 
     for command in commands:
-        _dispatch(command, engine, renderer)
+        _dispatch(command, controller, engine, renderer)
 
 
-def _dispatch(command, engine, renderer):
+def _dispatch(command, controller, engine, renderer):
     parts = command.split()
     if not parts:
         return
 
     action = parts[0]
     if action == "click":
-        engine.handle_click(int(parts[1]), int(parts[2]))
+        controller.click(int(parts[1]), int(parts[2]))
     elif action == "jump":
-        engine.handle_jump(int(parts[1]), int(parts[2]))
+        controller.jump(int(parts[1]), int(parts[2]))
     elif action == "wait":
         engine.wait(int(parts[1]))
     elif action == "print":

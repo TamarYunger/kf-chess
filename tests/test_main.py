@@ -25,7 +25,6 @@ def test_run_accepts_injected_config(capsys):
         COLORS=("w", "b"),
         PAWN_DIRECTION={"w": -1, "b": 1},
         EMPTY_CELL=".",
-        ALLOW_CONCURRENT_MOVES=False,
     )
     lines = ["Board:", "wK . bK", "Commands:", "print"]
     main_module.run(lines, config=custom_config)
@@ -35,4 +34,4 @@ def test_run_accepts_injected_config(capsys):
 
 def test_dispatch_ignores_blank_command():
     # Should not raise for an empty command line.
-    main_module._dispatch("", engine=None, renderer=None)
+    main_module._dispatch("", controller=None, engine=None, renderer=None)

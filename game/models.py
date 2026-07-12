@@ -1,16 +1,20 @@
 from dataclasses import dataclass
 
 
-@dataclass
-class Move:
-    piece: str
-    start: tuple
-    end: tuple
-    arrival: int
+@dataclass(frozen=True)
+class MoveResult:
+    """Outcome of GameEngine.request_move.
+
+    `reason` is always present and machine-readable: "ok" for an accepted
+    command, otherwise a stable code such as "game_over",
+    "motion_in_progress", or a RuleEngine reason (e.g. "illegal_piece_move").
+    """
+
+    accepted: bool
+    reason: str
 
 
-@dataclass
-class Jump:
-    piece: str
-    cell: tuple
-    end_time: int
+@dataclass(frozen=True)
+class JumpResult:
+    accepted: bool
+    reason: str

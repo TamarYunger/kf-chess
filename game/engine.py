@@ -1,27 +1,26 @@
-from game.models import Move, Jump
-from rules.movement_strategy import MoveContext
+from game.models import MoveResult, JumpResult
+from board_io.snapshot import GameSnapshot
 
 
 class GameEngine:
-    """Orchestrates KungFu Chess turns: clicks, jumps, waiting, and move
-    resolution.
+    """Application-service coordinator: game-over guard, validation
+    delegation, starting legal motions, wait delegation, and snapshots.
 
-    All collaborators (board, rule registry, win condition, promotion
-    rule, config) are injected through the constructor - no module-level
-    state, no hidden globals. That makes the engine straightforward to
-    unit test with fakes/stubs instead of monkeypatching.
+    GameEngine does not contain piece-specific movement logic (RuleEngine),
+    pixel mapping or selection state (Controller), or arrival/capture/timing
+    mechanics (RealTimeArbiter). It only sequences calls between them.
+
+    All collaborators are injected through the constructor - no module-level
+    state, no hidden globals. That makes the engine straightforward to unit
+    test with fakes/stubs instead of monkeypatching.
     """
 
-    def __init__(self, board, rule_registry, win_condition, promotion_rule, config):
+    def __init__(self, board, rule_engine, real_time_arbiter, config):
         self._board = board
-        self._registry = rule_registry
-        self._win_condition = win_condition
-        self._promotion_rule = promotion_rule
+        self._rule_engine = rule_engine
+        self._real_time_arbiter = real_time_arbiter
         self._config = config
         self._clock = 0
-        self._selected = None
-        self._active_moves = []
-        self._active_jumps = []
         self._game_over = False
 
     @property
@@ -33,155 +32,51 @@ class GameEngine:
         return self._clock
 
     @property
-    def selected(self):
-        return self._selected
+    def board(self):
+        """Read-only board access for Controller/Renderer. Mutation only
+        ever happens through RealTimeArbiter, at arrival time."""
+        return self._board
+
+    def is_cell_busy(self, cell):
+        return self._real_time_arbiter.is_cell_busy(cell)
+
+    def request_move(self, start, end):
+        if self._game_over:
+            return MoveResult(False, "game_over")
+
+        if self._real_time_arbiter.has_active_motion():
+            return MoveResult(False, "motion_in_progress")
+
+        validation = self._rule_engine.validate_move(self._board, start, end)
+        if not validation.is_valid:
+            return MoveResult(False, validation.reason)
+
+        piece = self._board.get(*start)
+        self._real_time_arbiter.start_motion(piece, start, end, self._clock)
+        return MoveResult(True, "ok")
+
+    def request_jump(self, cell):
+        if self._game_over:
+            return JumpResult(False, "game_over")
+
+        if self._real_time_arbiter.is_cell_busy(cell):
+            return JumpResult(False, "cell_busy")
+
+        if self._board.is_empty(*cell):
+            return JumpResult(False, "empty_source")
+
+        piece = self._board.get(*cell)
+        self._real_time_arbiter.start_jump(piece, cell, self._clock)
+        return JumpResult(True, "ok")
 
     def wait(self, dt):
         self._clock += dt
-        self._resolve_moves()
-
-    def render(self, renderer):
-        self._resolve_moves()
-        return renderer.render(self._board)
-
-    def handle_click(self, x, y):
-        self._resolve_moves()
-        if self._game_over:
-            return
-
-        cell = self._pixel_to_cell(x, y)
-        if cell is None:
-            return
-
-        if self._selected is None:
-            self._selected = self._select(cell)
-            return
-
-        self._act_on_selection(cell)
-
-    def handle_jump(self, x, y):
-        self._resolve_moves()
-        self._selected = None
-        if self._game_over:
-            return
-
-        cell = self._pixel_to_cell(x, y)
-        if cell is None:
-            return
-
-        if self._is_busy(cell):
-            return
-
-        piece = self._board.get(*cell)
-        if piece == self._config.EMPTY_CELL:
-            return
-
-        self._active_jumps.append(Jump(piece, cell, self._clock + self._config.JUMP_DURATION))
-
-    # -- internal helpers -------------------------------------------------
-
-    def _pixel_to_cell(self, x, y):
-        row = y // self._config.CELL_SIZE
-        col = x // self._config.CELL_SIZE
-        if not self._board.in_bounds(row, col):
-            return None
-        return row, col
-
-    def _select(self, cell):
-        if self._is_busy(cell):
-            return None
-        return cell if self._board.get(*cell) != self._config.EMPTY_CELL else None
-
-    def _act_on_selection(self, cell):
-        start = self._selected
-        piece = self._board.get(*start)
-
-        if piece == self._config.EMPTY_CELL or self._is_busy(start):
-            self._selected = None
-            return
-
-        target = self._board.get(*cell)
-        if target != self._config.EMPTY_CELL and target[0] == piece[0]:
-            if not self._is_busy(cell):
-                self._selected = cell
-            return
-
-        if not self._is_legal_move(piece, start, cell):
-            return  # illegal target: keep current selection
-        # Real-time policy: only one move may be in flight at a time, so a
-        # second move is rejected while any move is active and the piece that
-        # started first wins a contested route. Flip ALLOW_CONCURRENT_MOVES
-        # in config to lift this restriction.
-        if not self._config.ALLOW_CONCURRENT_MOVES and self._active_moves:
-            return
-        self._active_moves.append(Move(piece, start, cell, self._arrival_clock(start, cell)))
-        self._selected = None
-    def _arrival_clock(self, start, end):
-       """A move takes MOVE_DURATION per square travelled; distance is the
-       number of squares on a straight/diagonal path (Chebyshev metric)."""
-       distance = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
-       return self._clock + distance * self._config.MOVE_DURATION
-    
-    def _is_legal_move(self, piece, start, end):
-        strategy = self._registry.get(piece[1])
-        dr, dc = end[0] - start[0], end[1] - start[1]
-        context = MoveContext(
-            board=self._board,
-            color=piece[0],
-            start=start,
-            end=end,
-            target_occupied=not self._board.is_empty(*end),
-        )
-        return strategy.is_legal(dr, dc, context)
-
-    def _is_busy(self, cell):
-        return self._is_moving_from(cell) or self._is_jumping_on(cell)
-
-    def _is_moving_from(self, cell):
-        return any(move.start == cell for move in self._active_moves)
-
-    def _is_jumping_on(self, cell):
-        return any(jump.cell == cell for jump in self._active_jumps)
-
-    def _resolve_moves(self):
-        remaining = []
-        for move in self._active_moves:
-            if self._clock < move.arrival:
-                remaining.append(move)
-                continue
-            self._settle_move(move)
-        self._active_moves = remaining
-        self._resolve_jumps()
-
-    def _settle_move(self, move):
-        if self._is_intercepted(move):
-            # The moving piece is captured mid-flight by the jumping piece,
-            # so it is removed from its source rather than surviving there.
-            self._board.set(*move.start, self._config.EMPTY_CELL)
-            return
-
-        r, c = move.end
-        target = self._board.get(r, c)
-        if target != self._config.EMPTY_CELL and target[0] == move.piece[0]:
-            return
-
-        captured = None if target == self._config.EMPTY_CELL else target
-        if self._win_condition.is_game_over(captured):
+        events = self._real_time_arbiter.advance_time(self._clock)
+        if any(event.king_captured for event in events):
             self._game_over = True
 
-        piece = self._promotion_rule.promote(move.piece, r, self._board.height)
-        # The piece stays visible at its source while in flight; it leaves the
-        # source only now, on arrival. (A same-color piece blocking the target
-        # returns above, so the mover survives in place in that case.)
-        self._board.set(*move.start, self._config.EMPTY_CELL)
-        self._board.set(r, c, piece)
+    def snapshot(self):
+        return GameSnapshot.from_board(self._board, self._game_over)
 
-    def _is_intercepted(self, move):
-        r, c = move.end
-        return any(
-            jump.cell == (r, c) and jump.piece[0] != move.piece[0]
-            for jump in self._active_jumps
-        )
-
-    def _resolve_jumps(self):
-        self._active_jumps = [j for j in self._active_jumps if self._clock < j.end_time]
+    def render(self, renderer):
+        return renderer.render(self.snapshot())

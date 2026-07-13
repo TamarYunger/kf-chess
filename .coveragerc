@@ -1,0 +1,22 @@
+# Coverage.py configuration.
+#
+# The report measures the application source only: the test suite and the
+# pytest helper are omitted so the numbers reflect how well the *product*
+# code is exercised, not the tests themselves.
+[run]
+omit =
+    tests/*
+    conftest.py
+
+[report]
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    # Abstract method stubs never execute - subclasses override them.
+    @(abc\.)?abstractmethod
+    \.\.\.
+    # Type-checking-only imports never run at runtime.
+    if TYPE_CHECKING:
+
+[html]
+directory = htmlcov

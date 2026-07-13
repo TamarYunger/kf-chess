@@ -1,8 +1,8 @@
-from board.text_board import TextBoardRepresentation
+from board.board import Board
 
 
 def make_board():
-    return TextBoardRepresentation([["wK", ".", "bK"], [".", ".", "."]])
+    return Board([["wK", ".", "bK"], [".", ".", "."]])
 
 
 def test_dimensions():
@@ -38,6 +38,6 @@ def test_snapshot_is_a_copy():
 
 
 def test_empty_board_dimensions():
-    board = TextBoardRepresentation([])
+    board = Board([])
     assert board.width == 0
     assert board.height == 0

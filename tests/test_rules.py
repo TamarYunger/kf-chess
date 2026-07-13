@@ -1,6 +1,6 @@
 import pytest
 
-from board.text_board import TextBoardRepresentation
+from board.board import Board
 from rules.movement_strategy import MoveContext
 from rules.piece_rules import (
     KingMovement, QueenMovement, RookMovement,
@@ -19,7 +19,7 @@ def context(board, color, start, end):
 
 
 def empty_board(width=8, height=8):
-    return TextBoardRepresentation([["."] * width for _ in range(height)])
+    return Board([["."] * width for _ in range(height)])
 
 
 def test_king_moves_one_square_any_direction():
@@ -40,6 +40,12 @@ def test_rook_clear_path():
     board = empty_board()
     rook = RookMovement()
     assert rook.is_legal(0, 3, context(board, "w", (4, 4), (4, 7)))
+
+
+def test_rook_rejects_diagonal():
+    board = empty_board()
+    rook = RookMovement()
+    assert not rook.is_legal(2, 2, context(board, "w", (4, 4), (6, 6)))
 
 
 def test_bishop_requires_diagonal():
@@ -71,20 +77,18 @@ def test_pawn_single_step_forward():
 
 
 def test_pawn_double_step_requires_clear_path_and_start_row():
+    # White's home rank on an 8x8 board is rank 2 (row 6 = height-2), one row
+    # in from the back rank, as in standard chess.
     board = empty_board()
     pawn = PawnMovement({"w": -1, "b": 1})
-    # white's home row is one square in front of its back rank (row 6 on
-    # an 8-row board), matching standard chess - not the back rank itself.
     assert pawn.is_legal(-2, 0, context(board, "w", (6, 4), (4, 4)))
 
-    board.set(5, 4, "bP")
+    board.set(5, 4, "bP")  # intermediate square blocked
     assert not pawn.is_legal(-2, 0, context(board, "w", (6, 4), (4, 4)))
 
-
-def test_pawn_double_step_rejected_from_back_rank():
-    board = empty_board()
-    pawn = PawnMovement({"w": -1, "b": 1})
-    assert not pawn.is_legal(-2, 0, context(board, "w", (7, 4), (5, 4)))
+    # A pawn on the back rank (row 7) is not a home-rank pawn, so it may not
+    # double-step.
+    assert not pawn.is_legal(-2, 0, context(empty_board(), "w", (7, 4), (5, 4)))
 
 
 def test_pawn_diagonal_capture_only_when_occupied():

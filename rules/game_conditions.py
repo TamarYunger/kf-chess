@@ -28,7 +28,18 @@ class PromotionRule(ABC):
 
 
 class LastRankPromotion(PromotionRule):
-    def __init__(self, promotable_kind="P", promote_to="Q"):
+    """Promotes a pawn that reaches the far edge in its direction of travel.
+
+    The promotion rank is derived from the same per-color advance direction
+    that drives movement (`config.PAWN_DIRECTION`), so there is a single source
+    of truth for "which way each color goes": a color moving up (direction < 0)
+    promotes on row 0, a color moving down promotes on the last row. Flipping
+    the configured direction therefore moves promotion along with movement,
+    instead of the two silently disagreeing.
+    """
+
+    def __init__(self, directions, promotable_kind="P", promote_to="Q"):
+        self._directions = directions
         self._promotable_kind = promotable_kind
         self._promote_to = promote_to
 
@@ -36,7 +47,7 @@ class LastRankPromotion(PromotionRule):
         color, kind = piece[0], piece[1]
         if kind != self._promotable_kind:
             return piece
-        last_rank = 0 if color == "w" else board_height - 1
+        last_rank = 0 if self._directions[color] < 0 else board_height - 1
         if row == last_rank:
             return color + self._promote_to
         return piece

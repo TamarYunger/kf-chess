@@ -16,11 +16,10 @@ COLORS = ("w", "b")
 
 # Row delta a pawn advances by on a single step, per color.
 # The double-step home rank is not configured here: it is derived from the
-# board height in PawnMovement (0 for a downward color, height-1 for an
-# upward one), so the rule works for any board size.
+# board height in PawnMovement (1 for a downward color, height-2 for an
+# upward one - one row in front of the back rank, as in standard chess),
+# so the rule works for any board size.
 PAWN_DIRECTION = {"w": -1, "b": 1}
-
-
 
 # Token used to represent an empty cell on the board
 EMPTY_CELL = "."

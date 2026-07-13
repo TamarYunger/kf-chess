@@ -1,16 +1,15 @@
 from dataclasses import dataclass
 
+from rules.reasons import Reason
 from rules.movement_strategy import MoveContext
 
 
 @dataclass(frozen=True)
 class MoveValidation:
-    """Result of RuleEngine.validate_move.
+    """Result of a read-only legality check for a requested move.
 
-    `reason` is always present: "ok" for a legal move, otherwise a stable
-    machine-readable code ("empty_source", "friendly_destination",
-    "illegal_piece_move") that callers and tests can assert on directly,
-    instead of inferring legality from board state alone.
+    `reason` is always present: ``Reason.OK`` for a legal move, or a stable
+    rule-level code otherwise.
     """
 
     is_valid: bool
@@ -18,25 +17,29 @@ class MoveValidation:
 
 
 class RuleEngine:
-    """Answers "is this move legal right now?" - nothing else.
+    """Validates whether a move is legal against the current board (Validation
+    Service). Read-only: it inspects board state and returns a MoveValidation
+    but never mutates the board, starts motion, or knows about game-over.
 
-    Read-only with respect to the board: it inspects state and returns a
-    MoveValidation, but never mutates Board, starts motions, or knows about
-    game-over. Those are GameEngine/RealTimeArbiter responsibilities.
+    Stateless with respect to the board - the board is passed per call - so it
+    can be reused and tested in isolation. The piece-rule registry and config
+    are injected.
     """
 
     def __init__(self, rule_registry, config):
         self._registry = rule_registry
-        self._empty_cell = config.EMPTY_CELL
+        self._config = config
 
     def validate_move(self, board, start, end):
-        piece = board.get(*start)
-        if piece == self._empty_cell:
-            return MoveValidation(False, "empty_source")
+        if not board.in_bounds(*end):
+            return MoveValidation(False, Reason.OUTSIDE_BOARD)
+        if board.is_empty(*start):
+            return MoveValidation(False, Reason.EMPTY_SOURCE)
 
+        piece = board.get(*start)
         target = board.get(*end)
-        if target != self._empty_cell and target[0] == piece[0]:
-            return MoveValidation(False, "friendly_destination")
+        if target != self._config.EMPTY_CELL and target[0] == piece[0]:
+            return MoveValidation(False, Reason.FRIENDLY_DESTINATION)
 
         strategy = self._registry.get(piece[1])
         dr, dc = end[0] - start[0], end[1] - start[1]
@@ -45,9 +48,9 @@ class RuleEngine:
             color=piece[0],
             start=start,
             end=end,
-            target_occupied=target != self._empty_cell,
+            target_occupied=not board.is_empty(*end),
         )
         if not strategy.is_legal(dr, dc, context):
-            return MoveValidation(False, "illegal_piece_move")
+            return MoveValidation(False, Reason.ILLEGAL_PIECE_MOVE)
 
-        return MoveValidation(True, "ok")
+        return MoveValidation(True, Reason.OK)

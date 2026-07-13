@@ -9,7 +9,7 @@ class PieceRuleRegistry:
     new kind (e.g. "C" for a custom "Champion" piece) with its own
     MovementStrategy is all that's needed to support it - no engine or
     parser code has to change, and the piece automatically becomes a
-     valid board token (see board_io.parser).
+    valid board token (see game.parser).
     """
 
     def __init__(self):

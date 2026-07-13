@@ -1,9 +1,9 @@
 class BoardMapper:
-    """Converts pixel coordinates into board cells (Coordinate Adapter).
+    """Translates pixel coordinates into board cells (Coordinate Adapter).
 
-    Kept separate from Controller so pixel geometry has its own testable,
-    reusable unit: nothing about clicks, selection, or game commands lives
-    here, only the pixel<->cell arithmetic and bounds check.
+    Kept out of Board and Piece so the model stays free of pixels: only this
+    adapter knows the cell size. Returns None for a click that maps outside
+    the board bounds.
     """
 
     def __init__(self, board, cell_size):

@@ -74,6 +74,21 @@ class RealTimeArbiter:
     def is_jumping_on(self, cell):
         return any(jump.cell == cell for jump in self._active_jumps)
 
+    def is_resting(self, cell):
+        """Whether `cell` is still within its post-landing cooldown - a
+        move-landing rests for LONG_REST_DURATION, a jump-landing for
+        SHORT_REST_DURATION. Reuses the same self-pruning lookup as
+        `recent_arrivals` (a cell whose occupant has since changed is never
+        "resting")."""
+        arrival = self._recent_arrivals.get(cell)
+        if arrival is None or self._board.get(*cell) != arrival.piece:
+            return False
+        duration = (
+            self._config.SHORT_REST_DURATION if arrival.kind == "jump"
+            else self._config.LONG_REST_DURATION
+        )
+        return self._clock < arrival.at + duration
+
     def start_move(self, piece, start, end):
         self._active_moves.append(Move(piece, start, end, self._arrival_clock(start, end)))
 

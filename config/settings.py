@@ -11,6 +11,15 @@ CELL_SIZE = 100
 MOVE_DURATION = 1000
 JUMP_DURATION = 1000
 
+# How long a piece is blocked from starting a new move/jump after it lands,
+# per the kind of motion that landed it (mirrors the "short_rest"/
+# "long_rest" animation states, but is a separate, independently tunable
+# gameplay knob - not derived from the rest sprites' own frame_count/fps,
+# since sprite length is an art decision and cooldown length is a balance
+# decision).
+SHORT_REST_DURATION = 1000  # after landing from a jump
+LONG_REST_DURATION = 3000  # after landing from a move
+
 # Folder (relative to the project root) holding the graphics UI's assets:
 # board.png and pieces/<KIND><COLOR>/states/<state>/{config.json,sprites/*.png}
 ASSETS_DIR = "assets"

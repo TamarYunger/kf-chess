@@ -35,7 +35,11 @@ class GameEngine:
         return self._arbiter.clock
 
     def is_busy(self, cell):
-        return self._arbiter.is_moving_from(cell) or self._arbiter.is_jumping_on(cell)
+        return (
+            self._arbiter.is_moving_from(cell)
+            or self._arbiter.is_jumping_on(cell)
+            or self._arbiter.is_resting(cell)
+        )
 
     def can_select(self, cell):
         """Whether `cell` can be picked as a move source right now."""

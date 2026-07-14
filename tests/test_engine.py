@@ -1,3 +1,5 @@
+import types
+
 from config import settings
 from board.board import Board
 from rules.rule_registry import build_default_registry
@@ -27,22 +29,29 @@ class NoPromotion(PromotionRule):
         return piece
 
 
-def make_engine(rows, win_condition=None, promotion_rule=None):
+def make_engine(rows, win_condition=None, promotion_rule=None, config=None):
+    config = config or settings
     board = Board(rows)
-    registry = build_default_registry(settings)
+    registry = build_default_registry(config)
     arbiter = RealTimeArbiter(
         board=board,
-        promotion_rule=promotion_rule or LastRankPromotion(settings.PAWN_DIRECTION),
-        config=settings,
+        promotion_rule=promotion_rule or LastRankPromotion(config.PAWN_DIRECTION),
+        config=config,
     )
     engine = GameEngine(
         board=board,
-        rule_engine=RuleEngine(rule_registry=registry, config=settings),
+        rule_engine=RuleEngine(rule_registry=registry, config=config),
         arbiter=arbiter,
         win_condition=win_condition or KingCaptureWinCondition(),
-        config=settings,
+        config=config,
     )
     return engine, board
+
+
+def config_with(**overrides):
+    base = {k: v for k, v in vars(settings).items() if not k.startswith("_")}
+    base.update(overrides)
+    return types.SimpleNamespace(**base)
 
 
 def test_request_move_starts_a_legal_move():
@@ -80,14 +89,43 @@ def test_friendly_destination_is_rejected():
     assert result.reason == Reason.FRIENDLY_DESTINATION
 
 
-def test_second_move_while_one_is_active_is_rejected():
+def test_second_move_while_one_is_active_is_rejected_when_concurrent_moves_disabled():
     rows = [["wR", ".", "."], [".", ".", "."], ["bR", ".", "."]]
-    engine, board = make_engine(rows)
+    engine, board = make_engine(rows, config=config_with(ALLOW_CONCURRENT_MOVES=False))
     engine.request_move((0, 0), (0, 2))
     result = engine.request_move((2, 0), (2, 2))
 
     assert not result.is_accepted
     assert result.reason == Reason.MOTION_IN_PROGRESS
+
+
+def test_concurrent_moves_allowed_by_default_for_different_colors():
+    # The real KungFu Chess rule: no turns, either color may be moving at once.
+    rows = [["wR", ".", "."], [".", ".", "."], ["bR", ".", "."]]
+    engine, board = make_engine(rows)
+    result_white = engine.request_move((0, 0), (0, 2))
+    result_black = engine.request_move((2, 0), (2, 2))
+
+    assert result_white.is_accepted
+    assert result_black.is_accepted
+    engine.wait(2 * settings.MOVE_DURATION)
+    assert board.get(0, 2) == "wR"
+    assert board.get(2, 2) == "bR"
+
+
+def test_concurrent_moves_allowed_by_default_for_same_color():
+    # Nothing limits how many of one side's own pieces can move at once
+    # either - only a piece's own busy/resting state limits it.
+    rows = [["wR", ".", "."], [".", ".", "."], ["wR", ".", "."]]
+    engine, board = make_engine(rows)
+    result_first = engine.request_move((0, 0), (0, 2))
+    result_second = engine.request_move((2, 0), (2, 2))
+
+    assert result_first.is_accepted
+    assert result_second.is_accepted
+    engine.wait(2 * settings.MOVE_DURATION)
+    assert board.get(0, 2) == "wR"
+    assert board.get(2, 2) == "wR"
 
 
 def test_king_capture_ends_the_game():

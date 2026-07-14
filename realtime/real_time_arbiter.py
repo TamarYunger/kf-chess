@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from realtime.models import Move, Jump
+from realtime.models import Move, Jump, Arrival
 
 
 @dataclass(frozen=True)
@@ -40,10 +40,30 @@ class RealTimeArbiter:
         self._clock = 0
         self._active_moves = []
         self._active_jumps = []
+        self._recent_arrivals = {}
 
     @property
     def clock(self):
         return self._clock
+
+    @property
+    def active_moves(self):
+        return tuple(self._active_moves)
+
+    @property
+    def active_jumps(self):
+        return tuple(self._active_jumps)
+
+    @property
+    def recent_arrivals(self):
+        """Landings recorded for cells that still hold the piece that
+        landed there - self-pruning, so a piece that moves away or gets
+        captured makes its own stale entry unreadable on the next access,
+        with no explicit cleanup pass needed."""
+        return tuple(
+            arrival for cell, arrival in self._recent_arrivals.items()
+            if self._board.get(*cell) == arrival.piece
+        )
 
     def has_active_motion(self):
         return bool(self._active_moves)
@@ -108,6 +128,7 @@ class RealTimeArbiter:
         # returns above, so the mover survives in place in that case.)
         self._board.set(*move.start, self._config.EMPTY_CELL)
         self._board.set(r, c, piece)
+        self._record_arrival(piece, (r, c), kind="move")
         return ArrivalEvent(piece=piece, destination=(r, c), captured=captured)
 
     def _is_intercepted(self, move):
@@ -118,4 +139,13 @@ class RealTimeArbiter:
         )
 
     def _resolve_jumps(self):
-        self._active_jumps = [j for j in self._active_jumps if self._clock < j.end_time]
+        remaining = []
+        for jump in self._active_jumps:
+            if self._clock < jump.end_time:
+                remaining.append(jump)
+            else:
+                self._record_arrival(jump.piece, jump.cell, kind="jump")
+        self._active_jumps = remaining
+
+    def _record_arrival(self, piece, cell, kind):
+        self._recent_arrivals[cell] = Arrival(piece=piece, cell=cell, at=self._clock, kind=kind)

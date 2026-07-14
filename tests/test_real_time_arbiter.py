@@ -116,3 +116,74 @@ def test_is_moving_from_and_is_jumping_on():
     assert arbiter.is_moving_from((0, 0)) is True
     assert arbiter.is_moving_from((0, 2)) is False
     assert arbiter.is_jumping_on((0, 1)) is True
+
+
+def test_active_moves_and_jumps_reflect_in_flight_state():
+    arbiter, board = make_arbiter([["wR", "bP", "."]])
+    assert arbiter.active_moves == ()
+    assert arbiter.active_jumps == ()
+
+    arbiter.start_move("wR", (0, 0), (0, 2))
+    arbiter.start_jump("bP", (0, 1))
+    assert type(arbiter.active_moves) is tuple
+    assert type(arbiter.active_jumps) is tuple
+    assert len(arbiter.active_moves) == 1
+    assert arbiter.active_moves[0].start == (0, 0)
+    assert len(arbiter.active_jumps) == 1
+    assert arbiter.active_jumps[0].cell == (0, 1)
+
+
+def test_active_moves_empties_once_settled():
+    arbiter, board = make_arbiter([["wR", ".", "."]])
+    arbiter.start_move("wR", (0, 0), (0, 1))
+    arbiter.advance_time(settings.MOVE_DURATION)
+    assert arbiter.active_moves == ()
+
+
+def test_recent_arrivals_records_settled_move_with_kind_move():
+    arbiter, board = make_arbiter([["wR", ".", "."]])
+    arbiter.start_move("wR", (0, 0), (0, 1))
+    arbiter.advance_time(settings.MOVE_DURATION)
+
+    arrivals = {a.cell: a for a in arbiter.recent_arrivals}
+    assert (0, 1) in arrivals
+    assert arrivals[(0, 1)].piece == "wR"
+    assert arrivals[(0, 1)].kind == "move"
+    assert arrivals[(0, 1)].at == settings.MOVE_DURATION
+
+
+def test_recent_arrivals_records_settled_jump_with_kind_jump():
+    arbiter, board = make_arbiter([["bP", ".", "."]])
+    arbiter.start_jump("bP", (0, 0))
+    arbiter.advance_time(settings.JUMP_DURATION)
+
+    arrivals = {a.cell: a for a in arbiter.recent_arrivals}
+    assert (0, 0) in arrivals
+    assert arrivals[(0, 0)].piece == "bP"
+    assert arrivals[(0, 0)].kind == "jump"
+
+
+def test_recent_arrivals_drops_stale_entry_once_piece_at_cell_changes():
+    arbiter, board = make_arbiter([["wR", ".", "."]])
+    arbiter.start_move("wR", (0, 0), (0, 1))
+    arbiter.advance_time(settings.MOVE_DURATION)
+    assert any(a.cell == (0, 1) for a in arbiter.recent_arrivals)
+
+    # A different piece now occupies that cell - the old arrival must not
+    # be reported as still describing it.
+    board.set(0, 1, "bK")
+    assert not any(a.cell == (0, 1) for a in arbiter.recent_arrivals)
+
+
+def test_recent_arrivals_not_recorded_for_intercepted_move():
+    # The interceptor's own jump still lands (and is recorded), but the
+    # mover it captured mid-flight never "arrives", so no move-kind
+    # arrival is recorded for it.
+    arbiter, board = make_arbiter([["wR", "bP", "."]])
+    arbiter.start_move("wR", (0, 0), (0, 1))
+    arbiter.start_jump("bP", (0, 1))
+    arbiter.advance_time(settings.JUMP_DURATION)
+
+    kinds_by_cell = {a.cell: a.kind for a in arbiter.recent_arrivals}
+    assert kinds_by_cell.get((0, 1)) == "jump"
+    assert (0, 0) not in kinds_by_cell

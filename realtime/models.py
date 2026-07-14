@@ -25,3 +25,19 @@ class Jump:
     piece: str
     cell: tuple
     end_time: int
+
+
+@dataclass(frozen=True)
+class Arrival:
+    """The most recent landing (move or jump) recorded for a cell.
+
+    Kept only so the animation layer can compute "time since landing" for
+    the post-motion rest chain - the one piece of motion state that cannot
+    be derived from anything else. `kind` picks which rest chain applies
+    ("move" piece settle into long_rest, "jump" pieces into short_rest).
+    """
+
+    piece: str
+    cell: tuple
+    at: int
+    kind: str

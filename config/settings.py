@@ -11,6 +11,10 @@ CELL_SIZE = 100
 MOVE_DURATION = 1000
 JUMP_DURATION = 1000
 
+# Folder (relative to the project root) holding the graphics UI's assets:
+# board.png and pieces/<KIND><COLOR>/states/<state>/{config.json,sprites/*.png}
+ASSETS_DIR = "assets"
+
 # Player colors supported by the game
 COLORS = ("w", "b")
 

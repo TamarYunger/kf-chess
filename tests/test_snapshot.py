@@ -33,3 +33,27 @@ def test_renderer_produces_legacy_text_from_snapshot():
     board = Board([["wK", "."], [".", "bK"]])
     snap = GameSnapshot.from_board(board, game_over=False)
     assert BoardRenderer().render(snap) == "wK .\n. bK"
+
+
+def test_from_board_defaults_motion_fields_to_empty():
+    board = Board([["wK", "."]])
+    snap = GameSnapshot.from_board(board, game_over=False)
+    assert snap.moves == ()
+    assert snap.jumps == ()
+    assert snap.recent_arrivals == ()
+    assert snap.clock == 0
+
+
+def test_from_board_carries_motion_fields_when_passed():
+    board = Board([["wK", "."]])
+    moves = ("fake-move",)
+    jumps = ("fake-jump",)
+    arrivals = ("fake-arrival",)
+    snap = GameSnapshot.from_board(
+        board, game_over=False,
+        moves=moves, jumps=jumps, recent_arrivals=arrivals, clock=42,
+    )
+    assert snap.moves == moves
+    assert snap.jumps == jumps
+    assert snap.recent_arrivals == arrivals
+    assert snap.clock == 42

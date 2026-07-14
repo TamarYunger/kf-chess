@@ -69,6 +69,17 @@ class PieceView:
     frame_index: int
     x: float
     y: float
+    cell: tuple
+    rest_fraction: float | None = None  # 1.0 = just landed, 0.0 = cooldown over; None if not resting
+
+
+def rest_fraction_remaining(elapsed_ms, rest_duration_ms):
+    """1.0 right when a piece lands, decreasing to 0.0 once its post-landing
+    cooldown (config.SHORT_REST_DURATION / LONG_REST_DURATION) has fully
+    elapsed - drives the cooldown overlay drawn on a resting piece's cell."""
+    if not rest_duration_ms:
+        return 0.0
+    return max(0.0, min(1.0, 1.0 - elapsed_ms / rest_duration_ms))
 
 
 def compute_piece_views(snapshot, piece_configs, config):
@@ -97,6 +108,7 @@ def compute_piece_views(snapshot, piece_configs, config):
             move = moves_by_start.get(cell)
             jump = jumps_by_cell.get(cell)
             arrival = arrivals_by_cell.get(cell)
+            rest_fraction = None
 
             if move is not None and move.piece == token:
                 distance = max(abs(move.end[0] - move.start[0]), abs(move.end[1] - move.start[1]))
@@ -111,14 +123,22 @@ def compute_piece_views(snapshot, piece_configs, config):
                 frame_index = frame_index_for(state_configs[state], ms_into_state)
             elif arrival is not None and arrival.piece == token:
                 start_state = "long_rest" if arrival.kind == "move" else "short_rest"
-                state, ms_into_state = resolve_state_chain(state_configs, start_state, clock - arrival.at)
+                elapsed = clock - arrival.at
+                state, ms_into_state = resolve_state_chain(state_configs, start_state, elapsed)
                 x, y = col * cell_size, row * cell_size
                 frame_index = frame_index_for(state_configs[state], ms_into_state)
+                rest_duration = (
+                    config.LONG_REST_DURATION if arrival.kind == "move" else config.SHORT_REST_DURATION
+                )
+                rest_fraction = rest_fraction_remaining(elapsed, rest_duration)
             else:
                 state = "idle"
                 x, y = col * cell_size, row * cell_size
                 frame_index = frame_index_for(state_configs[state], clock)
 
-            views.append(PieceView(token=token, folder=folder, state=state, frame_index=frame_index, x=x, y=y))
+            views.append(PieceView(
+                token=token, folder=folder, state=state, frame_index=frame_index,
+                x=x, y=y, cell=cell, rest_fraction=rest_fraction,
+            ))
 
     return views

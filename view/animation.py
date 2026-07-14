@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from view.piece_assets import token_to_folder
+from view.piece_assets import token_to_folder, state_duration_ms
 
 
 def resolve_state_chain(state_configs, start_state, elapsed_ms):
@@ -26,7 +26,7 @@ def resolve_state_chain(state_configs, start_state, elapsed_ms):
         if cfg.next_state == state:
             return state, remaining
 
-        duration_ms = (cfg.frame_count / cfg.fps) * 1000 if cfg.fps else 0
+        duration_ms = state_duration_ms(cfg)
         if remaining < duration_ms or state in visited:
             return state, remaining
 

@@ -175,6 +175,55 @@ def test_recent_arrivals_drops_stale_entry_once_piece_at_cell_changes():
     assert not any(a.cell == (0, 1) for a in arbiter.recent_arrivals)
 
 
+def test_is_resting_true_right_after_a_move_lands():
+    arbiter, board = make_arbiter([["wR", ".", "."]])
+    arbiter.start_move("wR", (0, 0), (0, 1))
+    arbiter.advance_time(settings.MOVE_DURATION)
+    assert arbiter.is_resting((0, 1)) is True
+
+
+def test_is_resting_false_once_long_rest_duration_elapses():
+    arbiter, board = make_arbiter([["wR", ".", "."]])
+    arbiter.start_move("wR", (0, 0), (0, 1))
+    arbiter.advance_time(settings.MOVE_DURATION)
+    arbiter.advance_time(settings.LONG_REST_DURATION - 1)
+    assert arbiter.is_resting((0, 1)) is True
+    arbiter.advance_time(1)
+    assert arbiter.is_resting((0, 1)) is False
+
+
+def test_is_resting_true_right_after_a_jump_lands():
+    arbiter, board = make_arbiter([["bP", ".", "."]])
+    arbiter.start_jump("bP", (0, 0))
+    arbiter.advance_time(settings.JUMP_DURATION)
+    assert arbiter.is_resting((0, 0)) is True
+
+
+def test_is_resting_false_once_short_rest_duration_elapses():
+    arbiter, board = make_arbiter([["bP", ".", "."]])
+    arbiter.start_jump("bP", (0, 0))
+    arbiter.advance_time(settings.JUMP_DURATION)
+    arbiter.advance_time(settings.SHORT_REST_DURATION - 1)
+    assert arbiter.is_resting((0, 0)) is True
+    arbiter.advance_time(1)
+    assert arbiter.is_resting((0, 0)) is False
+
+
+def test_is_resting_false_for_a_cell_with_no_recent_arrival():
+    arbiter, board = make_arbiter([["wR", ".", "."]])
+    assert arbiter.is_resting((0, 0)) is False
+
+
+def test_is_resting_false_once_the_resting_piece_is_replaced():
+    arbiter, board = make_arbiter([["wR", ".", "."]])
+    arbiter.start_move("wR", (0, 0), (0, 1))
+    arbiter.advance_time(settings.MOVE_DURATION)
+    assert arbiter.is_resting((0, 1)) is True
+
+    board.set(0, 1, "bK")
+    assert arbiter.is_resting((0, 1)) is False
+
+
 def test_recent_arrivals_not_recorded_for_intercepted_move():
     # The interceptor's own jump still lands (and is recorded), but the
     # mover it captured mid-flight never "arrives", so no move-kind

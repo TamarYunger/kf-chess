@@ -205,6 +205,43 @@ def test_jump_on_busy_cell_is_rejected():
     assert result.reason == Reason.BUSY_CELL
 
 
+def test_can_select_is_false_while_a_landed_piece_is_resting():
+    engine, board = make_engine([["wR", ".", "."], [".", ".", "."], [".", ".", "."]])
+    engine.request_move((0, 0), (0, 2))
+    engine.wait(2 * settings.MOVE_DURATION)  # arrives at (0,2)
+    assert engine.can_select((0, 2)) is False
+
+
+def test_can_select_becomes_true_again_once_long_rest_elapses():
+    engine, board = make_engine([["wR", ".", "."], [".", ".", "."], [".", ".", "."]])
+    engine.request_move((0, 0), (0, 2))
+    engine.wait(2 * settings.MOVE_DURATION)
+    engine.wait(settings.LONG_REST_DURATION)
+    assert engine.can_select((0, 2)) is True
+
+
+def test_request_move_from_a_resting_source_is_rejected():
+    rows = [["wR", ".", "."], [".", ".", "."], [".", ".", "."]]
+    engine, board = make_engine(rows)
+    engine.request_move((0, 0), (0, 1))
+    engine.wait(settings.MOVE_DURATION)  # (0,1) now resting
+
+    result = engine.request_move((0, 1), (0, 2))
+    assert not result.is_accepted
+    assert result.reason == Reason.BUSY_SOURCE
+
+
+def test_request_jump_on_a_resting_cell_is_rejected():
+    rows = [["wR", ".", "."], [".", ".", "."], [".", ".", "."]]
+    engine, board = make_engine(rows)
+    engine.request_move((0, 0), (0, 1))
+    engine.wait(settings.MOVE_DURATION)  # (0,1) now resting
+
+    result = engine.request_jump((0, 1))
+    assert not result.is_accepted
+    assert result.reason == Reason.BUSY_CELL
+
+
 def test_snapshot_is_readonly_view_of_state():
     engine, board = make_engine([["wK", "."], [".", "bK"]])
     snap = engine.snapshot()

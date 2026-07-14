@@ -62,3 +62,9 @@ def load_all_piece_configs(assets_root):
 
 def sprite_path(folder, state, frame_index, assets_root):
     return Path(assets_root) / folder / "states" / state / "sprites" / f"{frame_index + 1}.png"
+
+
+def state_duration_ms(cfg):
+    """How long one full playthrough of this state's sprite frames takes,
+    at its own fps - the state's "natural" animation length."""
+    return (cfg.frame_count / cfg.fps) * 1000 if cfg.fps else 0

@@ -6,6 +6,8 @@ mouse: single click selects/moves, double click jumps.
 """
 import dataclasses
 import time
+import types
+from pathlib import Path
 
 import cv2
 
@@ -19,7 +21,9 @@ from game.board_mapper import BoardMapper
 from game.engine import GameEngine
 from game.controller import Controller
 from view.graphics_renderer import GraphicsRenderer
+from view.piece_assets import load_all_piece_configs, state_duration_ms
 
+PROJECT_ROOT = Path(__file__).resolve().parent
 WINDOW_NAME = "KungFu Chess"
 
 STANDARD_BOARD_TEXT = [
@@ -60,7 +64,32 @@ def build_game(board_lines, config=settings):
     return engine, controller
 
 
+def with_synced_rest_durations(config):
+    """Overrides SHORT_REST_DURATION/LONG_REST_DURATION with the real
+    short_rest/long_rest sprites' own playback duration (frame_count/fps),
+    so the gameplay cooldown always exactly matches how long the rest
+    animation actually plays - taking the max across piece kinds in case a
+    future skin gives them differing lengths (today they're uniform)."""
+    pieces_root = PROJECT_ROOT / config.ASSETS_DIR / "pieces"
+    piece_configs = load_all_piece_configs(pieces_root)
+    short = max(state_duration_ms(cfgs["short_rest"]) for cfgs in piece_configs.values())
+    long_ = max(state_duration_ms(cfgs["long_rest"]) for cfgs in piece_configs.values())
+    return types.SimpleNamespace(
+        CELL_SIZE=config.CELL_SIZE,
+        MOVE_DURATION=config.MOVE_DURATION,
+        JUMP_DURATION=config.JUMP_DURATION,
+        COLORS=config.COLORS,
+        PAWN_DIRECTION=config.PAWN_DIRECTION,
+        EMPTY_CELL=config.EMPTY_CELL,
+        ALLOW_CONCURRENT_MOVES=config.ALLOW_CONCURRENT_MOVES,
+        ASSETS_DIR=config.ASSETS_DIR,
+        SHORT_REST_DURATION=short,
+        LONG_REST_DURATION=long_,
+    )
+
+
 def run_gui(board_lines=None, config=settings):
+    config = with_synced_rest_durations(config)
     engine, controller = build_game(board_lines or STANDARD_BOARD_TEXT, config=config)
     renderer = GraphicsRenderer(config)
 

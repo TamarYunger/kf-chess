@@ -13,10 +13,11 @@ JUMP_DURATION = 1000
 
 # How long a piece is blocked from starting a new move/jump after it lands,
 # per the kind of motion that landed it (mirrors the "short_rest"/
-# "long_rest" animation states, but is a separate, independently tunable
-# gameplay knob - not derived from the rest sprites' own frame_count/fps,
-# since sprite length is an art decision and cooldown length is a balance
-# decision).
+# "long_rest" animation states). These are the fallback values used by the
+# text-mode CLI and by tests, which have no loaded sprite assets to sync to;
+# main_gui.py overrides both at startup with the real short_rest/long_rest
+# sprites' own playback duration (frame_count/fps), so in the graphical game
+# the cooldown always exactly matches how long the rest animation plays.
 SHORT_REST_DURATION = 1000  # after landing from a jump
 LONG_REST_DURATION = 3000  # after landing from a move
 

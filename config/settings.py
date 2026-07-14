@@ -39,7 +39,9 @@ PAWN_DIRECTION = {"w": -1, "b": 1}
 EMPTY_CELL = "."
 
 # Gameplay policy: may several moves be in flight at the same time?
-# The real-time variant resolves a contested route in favour of whoever
-# started first, so only one move is allowed at a time (default False).
-# Set True to re-enable concurrent moves.
-ALLOW_CONCURRENT_MOVES = False
+# True is the actual KungFu Chess rule: there are no turns, so any number of
+# pieces - either color, any mix - can be moving at once; the only per-piece
+# limit is its own busy/resting state (see GameEngine.is_busy). A contested
+# destination is resolved in favour of whoever started first. Set False to
+# fall back to one-motion-at-a-time (useful for simpler manual testing).
+ALLOW_CONCURRENT_MOVES = True

@@ -59,10 +59,9 @@ class GameEngine:
         if not validation.is_valid:
             return MoveResult(False, validation.reason)
 
-        # Real-time policy: only one move may be in flight at a time, so a
-        # second move is rejected while any move is active and the piece that
-        # started first wins a contested route. Flip ALLOW_CONCURRENT_MOVES in
-        # config to lift this restriction.
+        # ALLOW_CONCURRENT_MOVES defaults True (any number of pieces, either
+        # color, may be moving at once - that's the real-time rule). Set
+        # False in config to fall back to one-motion-at-a-time instead.
         if not self._config.ALLOW_CONCURRENT_MOVES and self._arbiter.has_active_motion():
             return MoveResult(False, Reason.MOTION_IN_PROGRESS)
 

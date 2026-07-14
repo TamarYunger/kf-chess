@@ -137,6 +137,31 @@ def test_king_capture_ends_the_game():
     assert engine.game_over is True
 
 
+def test_winner_is_none_before_game_over():
+    rows = [["wR", ".", "bK"], [".", ".", "."], [".", ".", "."]]
+    engine, board = make_engine(rows)
+    assert engine.winner is None
+
+
+def test_winner_is_the_color_whose_piece_survived():
+    rows = [["wR", ".", "bK"], [".", ".", "."], [".", ".", "."]]
+    engine, board = make_engine(rows)
+    engine.request_move((0, 0), (0, 2))  # white captures the black king
+    engine.wait(2 * settings.MOVE_DURATION)
+
+    assert engine.winner == "w"
+
+
+def test_winner_is_black_when_white_king_is_captured():
+    rows = [["wK", ".", "bR"], [".", ".", "."], [".", ".", "."]]
+    engine, board = make_engine(rows)
+    engine.request_move((0, 2), (0, 0))  # black captures the white king
+    engine.wait(2 * settings.MOVE_DURATION)
+
+    assert engine.game_over is True
+    assert engine.winner == "b"
+
+
 def test_move_after_game_over_is_rejected():
     rows = [["wR", ".", "bK"], ["bR", ".", "."], [".", ".", "."]]
     engine, board = make_engine(rows)

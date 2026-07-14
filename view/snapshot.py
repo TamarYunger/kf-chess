@@ -20,6 +20,9 @@ class GameSnapshot:
     renderer can animate in-flight pieces; the text renderer ignores them.
     They default to empty/zero so every existing caller that only cares
     about board contents is unaffected.
+
+    `winner` is the color that ended the game in its favour, populated by
+    the engine alongside `game_over`; None while the game is still on.
     """
 
     cells: tuple
@@ -31,10 +34,11 @@ class GameSnapshot:
     jumps: tuple = ()
     recent_arrivals: tuple = ()
     clock: int = 0
+    winner: str | None = None
 
     @classmethod
     def from_board(cls, board, game_over, selected=None, moves=(), jumps=(),
-                    recent_arrivals=(), clock=0):
+                    recent_arrivals=(), clock=0, winner=None):
         cells = tuple(tuple(row) for row in board.snapshot())
         return cls(
             cells=cells,
@@ -46,4 +50,5 @@ class GameSnapshot:
             jumps=jumps,
             recent_arrivals=recent_arrivals,
             clock=clock,
+            winner=winner,
         )

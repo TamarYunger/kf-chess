@@ -57,3 +57,15 @@ def test_from_board_carries_motion_fields_when_passed():
     assert snap.jumps == jumps
     assert snap.recent_arrivals == arrivals
     assert snap.clock == 42
+
+
+def test_from_board_defaults_winner_to_none():
+    board = Board([["wK", "."]])
+    snap = GameSnapshot.from_board(board, game_over=False)
+    assert snap.winner is None
+
+
+def test_from_board_carries_winner_when_passed():
+    board = Board([["wK", "."]])
+    snap = GameSnapshot.from_board(board, game_over=True, winner="w")
+    assert snap.winner == "w"

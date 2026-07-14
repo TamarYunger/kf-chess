@@ -25,10 +25,17 @@ class GameEngine:
         self._win_condition = win_condition
         self._config = config
         self._game_over = False
+        self._winner = None
 
     @property
     def game_over(self):
         return self._game_over
+
+    @property
+    def winner(self):
+        """The color that ended the game in its favour (the other color's
+        piece was the one captured), or None while the game is still on."""
+        return self._winner
 
     @property
     def clock(self):
@@ -91,6 +98,7 @@ class GameEngine:
             jumps=self._arbiter.active_jumps,
             recent_arrivals=self._arbiter.recent_arrivals,
             clock=self._arbiter.clock,
+            winner=self._winner,
         )
 
     def render(self, renderer):
@@ -105,3 +113,5 @@ class GameEngine:
         for event in events:
             if self._win_condition.is_game_over(event.captured):
                 self._game_over = True
+                captured_color = event.captured[0]
+                self._winner = next(c for c in self._config.COLORS if c != captured_color)

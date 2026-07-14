@@ -15,6 +15,11 @@ SELECTION_THICKNESS = 4
 REST_OVERLAY_COLOR = (0, 165, 255)  # BGR amber
 REST_OVERLAY_MAX_ALPHA = 0.55
 
+GAME_OVER_DIM_ALPHA = 0.55
+GAME_OVER_TEXT_COLOR = (255, 255, 255, 255)  # BGRA white
+GAME_OVER_LINE_GAP = 30
+COLOR_NAMES = {"w": "WHITE", "b": "BLACK"}
+
 
 class GraphicsRenderer:
     """Renders a GameSnapshot onto a cv2/numpy canvas (an Img), the
@@ -42,6 +47,8 @@ class GraphicsRenderer:
                 self._draw_rest_overlay(canvas, view.cell, view.rest_fraction)
             sprite = self._sprite(view.folder, view.state, view.frame_index)
             sprite.draw_on(canvas, int(view.x), int(view.y))
+        if snapshot.game_over:
+            self._draw_game_over_banner(canvas, snapshot)
         return canvas
 
     def _board_canvas(self, width, height):
@@ -90,3 +97,28 @@ class GraphicsRenderer:
         color = np.array(REST_OVERLAY_COLOR, dtype=np.float32)
         blended = region.astype(np.float32) * (1 - REST_OVERLAY_MAX_ALPHA) + color * REST_OVERLAY_MAX_ALPHA
         region[:] = blended.astype(region.dtype)
+
+    def _draw_game_over_banner(self, canvas, snapshot):
+        img = canvas.img
+        h, w = img.shape[:2]
+
+        dim_region = img[:, :, :3]
+        dim_region[:] = (dim_region.astype(np.float32) * (1 - GAME_OVER_DIM_ALPHA)).astype(dim_region.dtype)
+
+        lines = ["GAME OVER"]
+        if snapshot.winner is not None:
+            name = COLOR_NAMES.get(snapshot.winner, snapshot.winner.upper())
+            lines.append(f"{name} WINS")
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        styles = [(2.0, 5) if i == 0 else (1.1, 3) for i in range(len(lines))]
+        sizes = [cv2.getTextSize(text, font, scale, thickness)[0]
+                 for text, (scale, thickness) in zip(lines, styles)]
+
+        total_height = sum(size[1] for size in sizes) + GAME_OVER_LINE_GAP * (len(lines) - 1)
+        y = (h - total_height) // 2
+        for text, (scale, thickness), (text_w, text_h) in zip(lines, styles, sizes):
+            x = (w - text_w) // 2
+            y += text_h
+            cv2.putText(img, text, (x, y), font, scale, GAME_OVER_TEXT_COLOR, thickness, cv2.LINE_AA)
+            y += GAME_OVER_LINE_GAP

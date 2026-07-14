@@ -81,7 +81,14 @@ class GameEngine:
         self._apply_events(self._arbiter.advance_time(dt))
 
     def snapshot(self):
-        return GameSnapshot.from_board(self._board, self._game_over)
+        return GameSnapshot.from_board(
+            self._board,
+            self._game_over,
+            moves=self._arbiter.active_moves,
+            jumps=self._arbiter.active_jumps,
+            recent_arrivals=self._arbiter.recent_arrivals,
+            clock=self._arbiter.clock,
+        )
 
     def render(self, renderer):
         self._apply_events(self._arbiter.resolve())

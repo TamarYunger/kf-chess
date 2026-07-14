@@ -14,6 +14,12 @@ class GameSnapshot:
     `selected` is part of the shape (a graphical renderer highlights it) but is
     populated only by whoever owns selection state; the engine leaves it None,
     since `print board` never shows selection.
+
+    `moves`, `jumps`, `recent_arrivals` and `clock` carry the arbiter's
+    real-time motion state (all read-only, mirroring `cells`) so a graphical
+    renderer can animate in-flight pieces; the text renderer ignores them.
+    They default to empty/zero so every existing caller that only cares
+    about board contents is unaffected.
     """
 
     cells: tuple
@@ -21,9 +27,14 @@ class GameSnapshot:
     height: int
     game_over: bool
     selected: tuple | None = None
+    moves: tuple = ()
+    jumps: tuple = ()
+    recent_arrivals: tuple = ()
+    clock: int = 0
 
     @classmethod
-    def from_board(cls, board, game_over, selected=None):
+    def from_board(cls, board, game_over, selected=None, moves=(), jumps=(),
+                    recent_arrivals=(), clock=0):
         cells = tuple(tuple(row) for row in board.snapshot())
         return cls(
             cells=cells,
@@ -31,4 +42,8 @@ class GameSnapshot:
             height=board.height,
             game_over=game_over,
             selected=selected,
+            moves=moves,
+            jumps=jumps,
+            recent_arrivals=recent_arrivals,
+            clock=clock,
         )

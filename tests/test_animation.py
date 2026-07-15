@@ -109,7 +109,7 @@ def test_compute_piece_views_mid_move_interpolates():
     assert views[0].y == 0
 
 
-def test_compute_piece_views_airborne_jump_is_static():
+def test_compute_piece_views_jump_takeoff_has_no_lift_yet():
     board = Board([[".", "bP"]])
     jump = Jump("bP", (0, 1), end_time=settings.JUMP_DURATION)
     snap = GameSnapshot.from_board(board, game_over=False, jumps=(jump,), clock=0)
@@ -117,6 +117,34 @@ def test_compute_piece_views_airborne_jump_is_static():
     assert views[0].state == "jump"
     assert views[0].x == settings.CELL_SIZE
     assert views[0].y == 0
+
+
+def test_compute_piece_views_jump_lifts_at_midair_and_lands_flat():
+    board = Board([[".", "."], [".", "bP"]])
+    jump = Jump("bP", (1, 1), end_time=settings.JUMP_DURATION)
+
+    midair = GameSnapshot.from_board(
+        board, game_over=False, jumps=(jump,), clock=settings.JUMP_DURATION // 2,
+    )
+    views = compute_piece_views(midair, _piece_configs(), settings)
+    assert views[0].x == settings.CELL_SIZE  # horizontal position unaffected
+    assert views[0].y < settings.CELL_SIZE   # lifted above its resting row
+
+    landing = GameSnapshot.from_board(
+        board, game_over=False, jumps=(jump,), clock=settings.JUMP_DURATION,
+    )
+    views = compute_piece_views(landing, _piece_configs(), settings)
+    assert views[0].y == pytest.approx(settings.CELL_SIZE, abs=1)
+
+
+def test_jump_height_offset_never_pushes_a_top_row_piece_above_the_canvas():
+    board = Board([["bP", "."]])
+    jump = Jump("bP", (0, 0), end_time=settings.JUMP_DURATION)
+    snap = GameSnapshot.from_board(
+        board, game_over=False, jumps=(jump,), clock=settings.JUMP_DURATION // 2,
+    )
+    views = compute_piece_views(snap, _piece_configs(), settings)
+    assert views[0].y >= 0
 
 
 def test_compute_piece_views_stale_arrival_falls_through_to_idle():

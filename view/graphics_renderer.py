@@ -120,5 +120,5 @@ class GraphicsRenderer:
         for text, (scale, thickness), (text_w, text_h) in zip(lines, styles, sizes):
             x = (w - text_w) // 2
             y += text_h
-            cv2.putText(img, text, (x, y), font, scale, GAME_OVER_TEXT_COLOR, thickness, cv2.LINE_AA)
+            canvas.put_text(text, x, y, scale, GAME_OVER_TEXT_COLOR, thickness)
             y += GAME_OVER_LINE_GAP

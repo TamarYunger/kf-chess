@@ -1,6 +1,11 @@
+import math
 from dataclasses import dataclass
 
 from view.piece_assets import token_to_folder, state_duration_ms
+
+# How high a jumping piece lifts off its cell at the peak of its arc,
+# as a fraction of one cell's height.
+JUMP_HEIGHT_FRACTION = 0.35
 
 
 def resolve_state_chain(state_configs, start_state, elapsed_ms):
@@ -45,6 +50,14 @@ def frame_index_for(cfg, ms_into_state):
     if cfg.is_loop:
         return raw % cfg.frame_count
     return min(raw, cfg.frame_count - 1)
+
+
+def jump_height_offset(t, cell_size):
+    """Vertical lift (negative = up) for a jump in progress: 0 at takeoff
+    and landing, peaking at JUMP_HEIGHT_FRACTION of a cell halfway through
+    - a sine arc, not a straight up-and-back-down snap."""
+    t = max(0.0, min(1.0, t))
+    return -math.sin(math.pi * t) * JUMP_HEIGHT_FRACTION * cell_size
 
 
 def interpolate_position(start_cell, end_cell, start_time, arrival, clock, cell_size):
@@ -119,7 +132,9 @@ def compute_piece_views(snapshot, piece_configs, config):
             elif jump is not None and jump.piece == token:
                 start_time = jump.end_time - config.JUMP_DURATION
                 state, ms_into_state = resolve_state_chain(state_configs, "jump", clock - start_time)
-                x, y = col * cell_size, row * cell_size
+                t = (clock - start_time) / config.JUMP_DURATION if config.JUMP_DURATION else 1.0
+                x = col * cell_size
+                y = max(0, row * cell_size + jump_height_offset(t, cell_size))
                 frame_index = frame_index_for(state_configs[state], ms_into_state)
             elif arrival is not None and arrival.piece == token:
                 start_state = "long_rest" if arrival.kind == "move" else "short_rest"

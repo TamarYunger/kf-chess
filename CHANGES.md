@@ -41,8 +41,15 @@ Everything else (assets, animation state machine, renderer, `main_gui.py`, the r
 - **`view/graphics_renderer.py`**: `_draw_game_over_banner` - dims the whole board and draws "GAME OVER" / "<COLOR> WINS" centered, drawn once `snapshot.game_over` is true (still just rendering an existing snapshot field - no engine/rules change beyond exposing `winner`).
 - New tests in `tests/test_engine.py` (winner tracking for both colors), `tests/test_snapshot.py` (field default/passthrough), and `tests/test_graphics_renderer.py` (new file - asserts the banner actually dims the board and draws visible text pixels, without opening a window).
 
+## Session 3: jump arc + a code-review fix
+
+- **`view/animation.py`**: new `jump_height_offset(t, cell_size)` - a sine arc (0 at takeoff and landing, peaking at `JUMP_HEIGHT_FRACTION` of a cell halfway through). Wired into `compute_piece_views`'s jump branch so `y` actually moves during a jump, instead of only the in-place wobble sprite playing. Clamped so a piece jumping from the board's top row (no canvas headroom above it) is never drawn above the canvas - it simply doesn't lift, a real but minor edge case.
+- **`view/graphics_renderer.py`**: `_draw_game_over_banner` now calls `canvas.put_text(...)` (the given `Img` method) instead of `cv2.putText` directly - `canvas` is already an `Img`, so there was no reason to bypass its own wrapper for this one call. No behavior change (same underlying `cv2.putText`/`cv2.LINE_AA` call either way).
+- New tests in `tests/test_animation.py`: takeoff has no lift yet, mid-air is lifted and lands back flat, and a top-row jump never gets a negative `y`.
+
 ## Worth improving next
 
+- **Top-row jumps don't visually lift.** No canvas space exists above the board to show it without either clipping or adding a margin (which would also require adjusting click-to-cell mapping). Flagged to the user, not fixed without confirming it's wanted.
 - **Text-mode/GUI rest-duration mismatch.** `main.py` and the tests use the static fallback (1000/3000ms); only `main_gui.py` syncs to the real sprite duration (625/833ms). Harmless today (text mode has no visuals to sync to), but worth a comment or a shared constant if the two ever need to agree.
 - **No visual distinction between the two rest kinds.** The cooldown overlay is the same amber color whether a piece just moved or just jumped, even though they have different durations. A second color (or the overlay's own hue) could make that distinction readable at a glance.
 - **`build_game` duplicates `main.run`'s wiring** (~15 lines) rather than sharing it, done deliberately to keep zero risk to the tested CLI path. If a third entry point ever appears, that wiring is worth extracting into `game/wiring.py`.

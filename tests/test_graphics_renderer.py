@@ -41,6 +41,23 @@ def test_move_history_sidebar_draws_text_for_a_recorded_move():
     assert (history_panel >= 200).any(axis=-1).sum() > (blank_panel >= 200).any(axis=-1).sum()
 
 
+def test_sidebar_header_draws_score_next_to_the_color_name():
+    renderer = make_renderer()
+    board = Board([["wR", ".", "."], [".", ".", "."], [".", ".", "."]])
+    no_score_snap = GameSnapshot.from_board(board, game_over=False)
+    score_snap = GameSnapshot.from_board(board, game_over=False, score={"w": 9, "b": 0})
+
+    no_score_canvas = renderer.render(no_score_snap)
+    score_canvas = renderer.render(score_snap)
+
+    board_w = 3 * settings.CELL_SIZE
+    no_score_header = no_score_canvas.img[:40, board_w:, :3]
+    score_header = score_canvas.img[:40, board_w:, :3]
+    # A non-zero score adds extra header text pixels the zero-score header
+    # doesn't have.
+    assert (score_header >= 200).any(axis=-1).sum() > (no_score_header >= 200).any(axis=-1).sum()
+
+
 def test_move_history_sidebar_has_one_column_per_configured_color():
     import types
     three_color_config = types.SimpleNamespace(**{

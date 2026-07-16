@@ -380,3 +380,43 @@ def test_snapshot_carries_move_history():
     engine.request_move((0, 0), (0, 2))
     snap = engine.snapshot()
     assert [(r.piece, r.start, r.end) for r in snap.move_history["w"]] == [("wR", (0, 0), (0, 2))]
+
+
+def test_score_starts_at_zero_for_every_configured_color():
+    engine, board = make_engine([["wR", ".", "."]])
+    assert engine.score == {"w": 0, "b": 0}
+
+
+def test_capturing_a_piece_awards_its_point_value_to_the_capturer():
+    engine, board = make_engine([["wR", ".", "bN"]])
+    engine.request_move((0, 0), (0, 2))
+    engine.wait(2 * settings.MOVE_DURATION)
+
+    assert engine.score == {"w": settings.PIECE_VALUES["N"], "b": 0}
+
+
+def test_multiple_captures_accumulate():
+    engine, board = make_engine([["wR", "bP", "."], [".", ".", "."], ["wR", "bQ", "."]])
+    engine.request_move((0, 0), (0, 1))
+    engine.request_move((2, 0), (2, 1))
+    engine.wait(settings.MOVE_DURATION)
+
+    assert engine.score == {"w": settings.PIECE_VALUES["P"] + settings.PIECE_VALUES["Q"], "b": 0}
+
+
+def test_king_capture_awards_no_score():
+    rows = [["wR", ".", "bK"], [".", ".", "."], [".", ".", "."]]
+    engine, board = make_engine(rows)
+    engine.request_move((0, 0), (0, 2))
+    engine.wait(2 * settings.MOVE_DURATION)
+
+    assert engine.game_over is True
+    assert engine.score == {"w": 0, "b": 0}
+
+
+def test_snapshot_carries_score():
+    engine, board = make_engine([["wR", ".", "bN"]])
+    engine.request_move((0, 0), (0, 2))
+    engine.wait(2 * settings.MOVE_DURATION)
+
+    assert engine.snapshot().score == {"w": settings.PIECE_VALUES["N"], "b": 0}

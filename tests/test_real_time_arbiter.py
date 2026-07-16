@@ -118,6 +118,25 @@ def test_due_moves_settle_in_arrival_order_not_registration_order():
     assert board.get(0, 3) == "wR"
 
 
+def test_enemy_tie_on_a_shared_destination_is_won_by_registration_order():
+    # Two enemy rooks with the same distance arrive at the exact same tick,
+    # racing for the same empty square. There is no meaningful way to say
+    # which one "really" got there first - the tie is broken by whichever
+    # was registered second (sort() is stable, so equal arrivals keep their
+    # original relative order, and the later one in that order sees the
+    # earlier one's piece already sitting on the destination and captures
+    # it). This is a deliberate, documented choice - not a designed fairness
+    # rule, just the simplest deterministic tie-break - kept as-is because
+    # exact-tie races are a rare edge case not worth extra machinery for.
+    # If this ever needs to change, it changes here.
+    arbiter, board = make_arbiter([["wR", ".", "."], [".", ".", "."], [".", ".", "bR"]])
+    arbiter.start_move("wR", (0, 0), (0, 2))   # registered first, distance 2
+    arbiter.start_move("bR", (2, 2), (0, 2))   # registered second, distance 2 - same arrival
+    arbiter.advance_time(2 * settings.MOVE_DURATION)
+
+    assert board.get(0, 2) == "bR"
+
+
 def test_clock_advances_with_time():
     arbiter, board = make_arbiter([["wR", ".", "."]])
     assert arbiter.clock == 0

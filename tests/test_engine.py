@@ -128,6 +128,32 @@ def test_concurrent_moves_allowed_by_default_for_same_color():
     assert board.get(2, 2) == "wR"
 
 
+def test_second_same_color_move_to_a_contested_destination_is_rejected():
+    # Two white rooks converging on the same empty square is never a real
+    # choice - the second request is rejected outright, not left to silently
+    # fail to land once it arrives.
+    rows = [["wR", ".", "."], [".", ".", "."], [".", ".", "wR"]]
+    engine, board = make_engine(rows)
+    result_first = engine.request_move((0, 0), (0, 2))
+    result_second = engine.request_move((2, 2), (0, 2))
+
+    assert result_first.is_accepted
+    assert not result_second.is_accepted
+    assert result_second.reason == Reason.DESTINATION_CONTESTED
+
+
+def test_enemy_move_to_a_contested_destination_is_still_allowed():
+    # An enemy racing to the same square is a legitimate contest, not a
+    # mistake - only a same-color destination clash is rejected.
+    rows = [["wR", ".", "."], [".", ".", "."], [".", ".", "bR"]]
+    engine, board = make_engine(rows)
+    result_white = engine.request_move((0, 0), (0, 2))
+    result_black = engine.request_move((2, 2), (0, 2))
+
+    assert result_white.is_accepted
+    assert result_black.is_accepted
+
+
 def test_king_capture_ends_the_game():
     rows = [["wR", ".", "bK"], [".", ".", "."], [".", ".", "."]]
     engine, board = make_engine(rows)

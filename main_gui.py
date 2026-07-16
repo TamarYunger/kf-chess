@@ -20,7 +20,7 @@ from board.loaders import load_text_board
 from game.board_mapper import BoardMapper
 from game.engine import GameEngine
 from game.controller import Controller
-from view.graphics_renderer import GraphicsRenderer
+from view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
 from view.piece_assets import load_all_piece_configs, state_duration_ms
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -38,10 +38,15 @@ STANDARD_BOARD_TEXT = [
 ]
 
 
-def build_game(board_lines, config=settings):
+def build_game(board_lines, config=settings, board_x_offset=0):
     """Wires the same collaborators as main.run's first half (registry,
     board, arbiter, engine, controller), stopping short of dispatching any
-    commands - the GUI loop drives them interactively instead."""
+    commands - the GUI loop drives them interactively instead.
+
+    `board_x_offset` is how far the board's own left edge sits from the
+    window's left edge - non-zero once GraphicsRenderer draws a side panel
+    before it, so BoardMapper can convert raw mouse coordinates correctly.
+    """
     registry = build_default_registry(config)
     board = load_text_board(board_lines, registry, config)
 
@@ -59,7 +64,7 @@ def build_game(board_lines, config=settings):
     )
     controller = Controller(
         engine=engine,
-        board_mapper=BoardMapper(board, config.CELL_SIZE),
+        board_mapper=BoardMapper(board, config.CELL_SIZE, x_offset=board_x_offset),
     )
     return engine, controller
 
@@ -85,7 +90,9 @@ def with_synced_rest_durations(config):
 
 def run_gui(board_lines=None, config=settings):
     config = with_synced_rest_durations(config)
-    engine, controller = build_game(board_lines or STANDARD_BOARD_TEXT, config=config)
+    engine, controller = build_game(
+        board_lines or STANDARD_BOARD_TEXT, config=config, board_x_offset=SIDE_PANEL_WIDTH,
+    )
     renderer = GraphicsRenderer(config)
 
     def on_mouse(event, x, y, flags, userdata):

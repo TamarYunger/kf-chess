@@ -27,7 +27,7 @@ def test_token_to_folder_rejects_malformed_token():
 
 def test_load_state_config_reads_fps_loop_and_next_state():
     cfg = load_state_config("PW", "move", ASSETS_ROOT)
-    assert cfg.fps == 12
+    assert cfg.fps == 10
     assert cfg.is_loop is True
     assert cfg.next_state == "long_rest"
 

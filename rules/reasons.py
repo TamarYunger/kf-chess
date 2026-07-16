@@ -34,3 +34,4 @@ class Reason(str, Enum):
     MOTION_IN_PROGRESS = "motion_in_progress"
     BUSY_CELL = "busy_cell"
     EMPTY_CELL = "empty_cell"
+    DESTINATION_CONTESTED = "destination_contested"

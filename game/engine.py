@@ -81,6 +81,15 @@ class GameEngine:
             return MoveResult(False, Reason.MOTION_IN_PROGRESS)
 
         piece = self._board.get(*start)
+
+        # Two of your own pieces racing to the same square is never a real
+        # choice - reject the second request outright instead of letting it
+        # start and silently fail to land later. An enemy piece is still
+        # allowed to target the same cell (that's a legitimate race, not a
+        # mistake) - only a same-color contest is rejected here.
+        if any(move.end == end and move.piece[0] == piece[0] for move in self._arbiter.active_moves):
+            return MoveResult(False, Reason.DESTINATION_CONTESTED)
+
         self._arbiter.start_move(piece, start, end)
         self._move_history[piece[0]].append(MoveRecord(piece, start, end))
         return MoveResult(True, Reason.OK)

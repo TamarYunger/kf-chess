@@ -15,6 +15,10 @@ class GameSnapshot:
     populated only by whoever owns selection state; the engine leaves it None,
     since `print board` never shows selection.
 
+    `rejection_reason` mirrors `selected`: UI-only feedback about why the
+    most recent command was refused, populated by whoever owns that state
+    (the Controller) - the engine leaves it None.
+
     `moves`, `jumps`, `recent_arrivals` and `clock` carry the arbiter's
     real-time motion state (all read-only, mirroring `cells`) so a graphical
     renderer can animate in-flight pieces; the text renderer ignores them.
@@ -37,6 +41,7 @@ class GameSnapshot:
     height: int
     game_over: bool
     selected: tuple | None = None
+    rejection_reason: str | None = None
     moves: tuple = ()
     jumps: tuple = ()
     recent_arrivals: tuple = ()
@@ -48,7 +53,7 @@ class GameSnapshot:
     @classmethod
     def from_board(cls, board, game_over, selected=None, moves=(), jumps=(),
                     recent_arrivals=(), clock=0, winner=None, move_history=None,
-                    score=None):
+                    score=None, rejection_reason=None):
         cells = tuple(tuple(row) for row in board.snapshot())
         return cls(
             cells=cells,
@@ -56,6 +61,7 @@ class GameSnapshot:
             height=board.height,
             game_over=game_over,
             selected=selected,
+            rejection_reason=rejection_reason,
             moves=moves,
             jumps=jumps,
             recent_arrivals=recent_arrivals,

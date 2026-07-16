@@ -3,6 +3,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from rules.reasons import Reason
 from view.img import Img
 from view.piece_assets import load_all_piece_configs, sprite_path
 from view.animation import compute_piece_views
@@ -21,19 +22,43 @@ GAME_OVER_TEXT_COLOR = (255, 255, 255, 255)  # BGRA white
 GAME_OVER_LINE_GAP = 30
 COLOR_NAMES = {"w": "WHITE", "b": "BLACK"}
 
-# Move-history sidebar, drawn to the right of the board. One column per
-# color (however many config.COLORS defines), each a scrolling-from-the-
-# bottom list of that color's accepted moves.
-SIDEBAR_WIDTH = 240
-SIDEBAR_BG_COLOR = (40, 40, 40, 255)  # BGRA dark gray
-SIDEBAR_PADDING = 14
-SIDEBAR_COLUMN_GAP = 10
-SIDEBAR_HEADER_COLOR = (0, 215, 255, 255)  # BGRA amber
-SIDEBAR_HEADER_FONT_SCALE = 0.6
-SIDEBAR_HEADER_HEIGHT = 34
-SIDEBAR_TEXT_COLOR = (230, 230, 230, 255)  # BGRA near-white
-SIDEBAR_TEXT_FONT_SCALE = 0.5
-SIDEBAR_LINE_HEIGHT = 22
+# A transient bar along the bottom of the board explaining why the last
+# click/jump did nothing - cleared as soon as any command succeeds (see
+# Controller.last_rejection). Never shown together with the game-over
+# banner (see render()): once the game is over that's the only message
+# that matters.
+REJECTION_BAR_COLOR = (0, 0, 180)  # BGR dark red
+REJECTION_BAR_ALPHA = 0.75
+REJECTION_TEXT_COLOR = (255, 255, 255, 255)  # BGRA white
+REJECTION_FONT_SCALE = 0.6
+REJECTION_THICKNESS = 2
+REJECTION_PADDING = 8
+REJECTION_MESSAGES = {
+    Reason.OUTSIDE_BOARD: "Outside the board",
+    Reason.EMPTY_SOURCE: "No piece there",
+    Reason.FRIENDLY_DESTINATION: "Your own piece is already there",
+    Reason.ILLEGAL_PIECE_MOVE: "Illegal move for that piece",
+    Reason.GAME_OVER: "The game is over",
+    Reason.BUSY_SOURCE: "That piece is already moving",
+    Reason.MOTION_IN_PROGRESS: "Another move is already in progress",
+    Reason.BUSY_CELL: "That cell is busy",
+    Reason.EMPTY_CELL: "No piece there to jump",
+    Reason.DESTINATION_CONTESTED: "Another of your pieces is already headed there",
+}
+
+# Per-color move-history + score panel, one flanking each side of the
+# board: the first color in config.COLORS on the left, every other color
+# on the right (as extra columns, for the rare case of more than two).
+SIDE_PANEL_WIDTH = 220
+SIDE_PANEL_BG_COLOR = (40, 40, 40, 255)  # BGRA dark gray
+SIDE_PANEL_PADDING = 14
+SIDE_PANEL_COLUMN_GAP = 10
+SIDE_PANEL_HEADER_COLOR = (0, 215, 255, 255)  # BGRA amber
+SIDE_PANEL_HEADER_FONT_SCALE = 0.6
+SIDE_PANEL_HEADER_HEIGHT = 34
+SIDE_PANEL_TEXT_COLOR = (230, 230, 230, 255)  # BGRA near-white
+SIDE_PANEL_TEXT_FONT_SCALE = 0.5
+SIDE_PANEL_LINE_HEIGHT = 22
 
 
 class GraphicsRenderer:
@@ -64,7 +89,10 @@ class GraphicsRenderer:
             sprite.draw_on(canvas, int(view.x), int(view.y))
         if snapshot.game_over:
             self._draw_game_over_banner(canvas, snapshot)
-        return self._with_move_history_sidebar(canvas, snapshot)
+        elif snapshot.rejection_reason is not None:
+            message = REJECTION_MESSAGES.get(snapshot.rejection_reason, str(snapshot.rejection_reason))
+            self._draw_rejection_banner(canvas, message)
+        return self._with_side_panels(canvas, snapshot)
 
     def _board_canvas(self, width, height):
         cell = self._config.CELL_SIZE
@@ -140,36 +168,60 @@ class GraphicsRenderer:
             canvas.put_text(text, x, y, scale, GAME_OVER_TEXT_COLOR, thickness)
             y += GAME_OVER_LINE_GAP
 
-    def _with_move_history_sidebar(self, board_canvas, snapshot):
-        """Returns a new, wider canvas: the board unchanged on the left, a
-        move-history panel appended on the right - one column per color in
-        `config.COLORS`, so this works for any number of colors, not just
-        two."""
-        board_h, board_w = board_canvas.img.shape[:2]
-        panel = Img()
-        panel.img = np.full((board_h, board_w + SIDEBAR_WIDTH, 4), SIDEBAR_BG_COLOR, dtype=board_canvas.img.dtype)
-        panel.img[:, :board_w] = board_canvas.img
-        self._draw_move_history(panel, snapshot, board_w, board_h)
-        return panel
+    def _draw_rejection_banner(self, canvas, message):
+        img = canvas.img
+        h, w = img.shape[:2]
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        (text_w, text_h), _ = cv2.getTextSize(message, font, REJECTION_FONT_SCALE, REJECTION_THICKNESS)
 
-    def _draw_move_history(self, canvas, snapshot, x_offset, panel_height):
+        bar_h = text_h + 2 * REJECTION_PADDING
+        top = h - bar_h
+        region = img[top:h, :, :3]
+        color = np.array(REJECTION_BAR_COLOR, dtype=np.float32)
+        blended = region.astype(np.float32) * (1 - REJECTION_BAR_ALPHA) + color * REJECTION_BAR_ALPHA
+        region[:] = blended.astype(region.dtype)
+
+        x = (w - text_w) // 2
+        y = h - REJECTION_PADDING - 2
+        canvas.put_text(message, x, y, REJECTION_FONT_SCALE, REJECTION_TEXT_COLOR, REJECTION_THICKNESS)
+
+    def _with_side_panels(self, board_canvas, snapshot):
+        """Returns a new, wider canvas: a panel for the first color on the
+        left, the board unchanged in the middle, and a panel for every
+        other color on the right - a two-color game (the normal case) gets
+        one full panel per side; any extra colors just add columns to the
+        right panel instead of a third side."""
+        board_h, board_w = board_canvas.img.shape[:2]
         colors = self._config.COLORS
+        left_colors, right_colors = (colors[:1], colors[1:]) if colors else ((), ())
+
+        canvas = Img()
+        total_w = SIDE_PANEL_WIDTH + board_w + SIDE_PANEL_WIDTH
+        canvas.img = np.full((board_h, total_w, 4), SIDE_PANEL_BG_COLOR, dtype=board_canvas.img.dtype)
+        canvas.img[:, SIDE_PANEL_WIDTH:SIDE_PANEL_WIDTH + board_w] = board_canvas.img
+
+        self._draw_color_panel(canvas, snapshot, left_colors, 0, SIDE_PANEL_WIDTH, board_h)
+        self._draw_color_panel(canvas, snapshot, right_colors, SIDE_PANEL_WIDTH + board_w, SIDE_PANEL_WIDTH, board_h)
+        return canvas
+
+    def _draw_color_panel(self, canvas, snapshot, colors, x_offset, panel_width, panel_height):
         if not colors:
             return
 
-        column_width = (SIDEBAR_WIDTH - 2 * SIDEBAR_PADDING - (len(colors) - 1) * SIDEBAR_COLUMN_GAP) // len(colors)
-        max_lines = max(0, (panel_height - SIDEBAR_HEADER_HEIGHT - SIDEBAR_PADDING) // SIDEBAR_LINE_HEIGHT)
+        column_width = (panel_width - 2 * SIDE_PANEL_PADDING
+                         - (len(colors) - 1) * SIDE_PANEL_COLUMN_GAP) // len(colors)
+        max_lines = max(0, (panel_height - SIDE_PANEL_HEADER_HEIGHT - SIDE_PANEL_PADDING) // SIDE_PANEL_LINE_HEIGHT)
 
         for i, color in enumerate(colors):
-            col_x = x_offset + SIDEBAR_PADDING + i * (column_width + SIDEBAR_COLUMN_GAP)
+            col_x = x_offset + SIDE_PANEL_PADDING + i * (column_width + SIDE_PANEL_COLUMN_GAP)
             name = COLOR_NAMES.get(color, color.upper())
             points = snapshot.score.get(color, 0)
-            canvas.put_text(f"{name}  {points}", col_x, SIDEBAR_PADDING + 16,
-                             SIDEBAR_HEADER_FONT_SCALE, SIDEBAR_HEADER_COLOR, 2)
+            canvas.put_text(f"{name}  {points}", col_x, SIDE_PANEL_PADDING + 16,
+                             SIDE_PANEL_HEADER_FONT_SCALE, SIDE_PANEL_HEADER_COLOR, 2)
 
             records = snapshot.move_history.get(color, ())[-max_lines:] if max_lines else ()
-            y = SIDEBAR_HEADER_HEIGHT + SIDEBAR_PADDING
+            y = SIDE_PANEL_HEADER_HEIGHT + SIDE_PANEL_PADDING
             for record in records:
                 text = move_notation(record, snapshot.height)
-                canvas.put_text(text, col_x, y, SIDEBAR_TEXT_FONT_SCALE, SIDEBAR_TEXT_COLOR, 1)
-                y += SIDEBAR_LINE_HEIGHT
+                canvas.put_text(text, col_x, y, SIDE_PANEL_TEXT_FONT_SCALE, SIDE_PANEL_TEXT_COLOR, 1)
+                y += SIDE_PANEL_LINE_HEIGHT

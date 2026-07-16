@@ -1,3 +1,5 @@
+import dataclasses
+
 from game.models import MoveResult, MoveRecord
 from rules.reasons import Reason
 from view.snapshot import GameSnapshot
@@ -146,6 +148,7 @@ class GameEngine:
         later event in the same batch silently overwrite `_winner`.
         """
         for event in events:
+            self._record_promotion(event)
             if event.captured is not None:
                 capturer_color = event.piece[0]
                 self._score[capturer_color] += self._config.PIECE_VALUES[event.captured[1]]
@@ -153,4 +156,18 @@ class GameEngine:
                 self._game_over = True
                 captured_color = event.captured[0]
                 self._winner = next(c for c in self._config.COLORS if c != captured_color)
+                break
+
+    def _record_promotion(self, event):
+        """Patches the move-history record this arrival corresponds to with
+        the promoted kind, if the piece that landed differs from the one
+        that set out - found by matching color + destination, searching the
+        most recent record first (that's always the one this event settled,
+        since two same-color moves can never target the same destination -
+        see the DESTINATION_CONTESTED guard in request_move)."""
+        history = self._move_history[event.piece[0]]
+        for i in range(len(history) - 1, -1, -1):
+            record = history[i]
+            if record.end == event.destination and record.piece[1] != event.piece[1]:
+                history[i] = dataclasses.replace(record, promoted_to=event.piece[1])
                 break

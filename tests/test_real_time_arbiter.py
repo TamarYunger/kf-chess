@@ -102,6 +102,22 @@ def test_friendly_piece_at_destination_cancels_arrival():
     assert events == []
 
 
+def test_due_moves_settle_in_arrival_order_not_registration_order():
+    # wR is registered first but travels 3 squares (arrives later); wP is
+    # registered second but travels 1 square (arrives earlier). A single
+    # large advance makes both due in the same resolve() call - wP's earlier
+    # arrival must be applied to the board before wR's later one, regardless
+    # of which start_move call came first.
+    arbiter, board = make_arbiter([["wR", ".", ".", "."], ["wP", ".", ".", "."]])
+    arbiter.start_move("wR", (0, 0), (0, 3))   # arrives at 3 * MOVE_DURATION
+    arbiter.start_move("wP", (1, 0), (1, 1))   # arrives at 1 * MOVE_DURATION
+    events = arbiter.advance_time(3 * settings.MOVE_DURATION)
+
+    assert [event.destination for event in events] == [(1, 1), (0, 3)]
+    assert board.get(1, 1) == "wP"
+    assert board.get(0, 3) == "wR"
+
+
 def test_clock_advances_with_time():
     arbiter, board = make_arbiter([["wR", ".", "."]])
     assert arbiter.clock == 0

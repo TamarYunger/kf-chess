@@ -46,6 +46,24 @@ def test_out_of_bounds_destination_is_rejected():
     assert result.reason == Reason.OUTSIDE_BOARD
 
 
+def test_out_of_bounds_source_is_rejected():
+    engine, board = make_engine([["wR", ".", "."]])
+    result = engine.validate_move(board, (0, 5), (0, 0))
+    assert not result.is_valid
+    assert result.reason == Reason.OUTSIDE_BOARD
+
+
+def test_negative_source_is_rejected_not_wrapped():
+    # A negative index is valid Python list indexing (wraps to the last
+    # row/col) rather than raising, so it must be checked explicitly - it
+    # would otherwise silently resolve to a real, wrong cell instead of
+    # being rejected.
+    engine, board = make_engine([["wR", ".", "."]])
+    result = engine.validate_move(board, (-1, 0), (0, 1))
+    assert not result.is_valid
+    assert result.reason == Reason.OUTSIDE_BOARD
+
+
 def test_enemy_at_destination_is_a_legal_capture_target():
     engine, board = make_engine([["wR", ".", "bR"]])
     result = engine.validate_move(board, (0, 0), (0, 2))

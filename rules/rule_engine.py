@@ -31,7 +31,7 @@ class RuleEngine:
         self._config = config
 
     def validate_move(self, board, start, end):
-        if not board.in_bounds(*end):
+        if not board.in_bounds(*start) or not board.in_bounds(*end):
             return MoveValidation(False, Reason.OUTSIDE_BOARD)
         if board.is_empty(*start):
             return MoveValidation(False, Reason.EMPTY_SOURCE)

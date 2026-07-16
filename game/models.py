@@ -13,3 +13,16 @@ class MoveResult:
 
     is_accepted: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class MoveRecord:
+    """One accepted move, kept for the per-color move history.
+
+    Recorded at accept time (`GameEngine.request_move`), not on arrival - it
+    logs what was committed, the same moment standard chess notation would.
+    """
+
+    piece: str
+    start: tuple
+    end: tuple

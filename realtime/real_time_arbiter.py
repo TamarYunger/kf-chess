@@ -102,13 +102,21 @@ class RealTimeArbiter:
 
     def resolve(self):
         """Settle any moves whose arrival time has been reached, without
-        advancing the clock. Returns the arrival events produced."""
-        remaining = []
-        events = []
+        advancing the clock. Returns the arrival events produced.
+
+        Due moves are settled in arrival order, not registration order: a
+        single `resolve` call can find several moves due at once (e.g. after
+        a large `advance_time`), and whichever actually arrives earlier must
+        be written to the board first, regardless of which `start_move` call
+        registered it first.
+        """
+        due, remaining = [], []
         for move in self._active_moves:
-            if self._clock < move.arrival:
-                remaining.append(move)
-                continue
+            (due if self._clock >= move.arrival else remaining).append(move)
+        due.sort(key=lambda move: move.arrival)
+
+        events = []
+        for move in due:
             event = self._settle_move(move)
             if event is not None:
                 events.append(event)

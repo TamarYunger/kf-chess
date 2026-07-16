@@ -69,3 +69,16 @@ def test_from_board_carries_winner_when_passed():
     board = Board([["wK", "."]])
     snap = GameSnapshot.from_board(board, game_over=True, winner="w")
     assert snap.winner == "w"
+
+
+def test_from_board_defaults_move_history_to_empty_dict():
+    board = Board([["wK", "."]])
+    snap = GameSnapshot.from_board(board, game_over=False)
+    assert snap.move_history == {}
+
+
+def test_from_board_carries_move_history_when_passed():
+    board = Board([["wK", "."]])
+    history = {"w": ("fake-record",), "b": ()}
+    snap = GameSnapshot.from_board(board, game_over=False, move_history=history)
+    assert snap.move_history == history

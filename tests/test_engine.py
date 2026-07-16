@@ -162,6 +162,20 @@ def test_winner_is_black_when_white_king_is_captured():
     assert engine.winner == "b"
 
 
+def test_winner_reflects_the_chronologically_first_king_capture():
+    # wR captures bK after 2 squares (arrives first); bR captures wK after 3
+    # squares (arrives later) - both settle in the same `wait`. Even though
+    # bR's move was requested first, wR's capture happens first in time and
+    # must decide the winner; the later capture must not overwrite it.
+    rows = [["wK", ".", ".", "bR"], ["bK", ".", "wR", "."]]
+    engine, board = make_engine(rows)
+    engine.request_move((0, 3), (0, 0))  # bR -> captures wK, 3 squares
+    engine.request_move((1, 2), (1, 0))  # wR -> captures bK, 2 squares
+    engine.wait(3 * settings.MOVE_DURATION)
+
+    assert engine.winner == "w"
+
+
 def test_move_after_game_over_is_rejected():
     rows = [["wR", ".", "bK"], ["bR", ".", "."], [".", ".", "."]]
     engine, board = make_engine(rows)
@@ -312,3 +326,31 @@ def test_snapshot_is_readonly_view_of_state():
     assert snap.width == 2 and snap.height == 2
     assert snap.game_over is False
     assert snap.selected is None
+
+
+def test_move_history_starts_empty_for_every_configured_color():
+    engine, board = make_engine([["wR", ".", "."]])
+    assert engine.move_history == {"w": (), "b": ()}
+
+
+def test_accepted_move_is_appended_to_its_color_history():
+    engine, board = make_engine([["wR", ".", "."], [".", ".", "."], ["bR", ".", "."]])
+    engine.request_move((0, 0), (0, 2))
+    engine.request_move((2, 0), (2, 1))
+
+    history = engine.move_history
+    assert [(r.piece, r.start, r.end) for r in history["w"]] == [("wR", (0, 0), (0, 2))]
+    assert [(r.piece, r.start, r.end) for r in history["b"]] == [("bR", (2, 0), (2, 1))]
+
+
+def test_rejected_move_is_not_recorded():
+    engine, board = make_engine([["wN", ".", "."], [".", ".", "."], [".", ".", "."]])
+    engine.request_move((0, 0), (0, 1))  # illegal knight move
+    assert engine.move_history["w"] == ()
+
+
+def test_snapshot_carries_move_history():
+    engine, board = make_engine([["wR", ".", "."]])
+    engine.request_move((0, 0), (0, 2))
+    snap = engine.snapshot()
+    assert [(r.piece, r.start, r.end) for r in snap.move_history["w"]] == [("wR", (0, 0), (0, 2))]

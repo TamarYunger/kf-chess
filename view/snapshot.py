@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,10 @@ class GameSnapshot:
 
     `winner` is the color that ended the game in its favour, populated by
     the engine alongside `game_over`; None while the game is still on.
+
+    `move_history` maps each color to its tuple of accepted MoveRecords, for
+    a renderer that wants to display a move log; defaults to empty so
+    existing callers that don't care about it are unaffected.
     """
 
     cells: tuple
@@ -35,10 +39,11 @@ class GameSnapshot:
     recent_arrivals: tuple = ()
     clock: int = 0
     winner: str | None = None
+    move_history: dict = field(default_factory=dict)
 
     @classmethod
     def from_board(cls, board, game_over, selected=None, moves=(), jumps=(),
-                    recent_arrivals=(), clock=0, winner=None):
+                    recent_arrivals=(), clock=0, winner=None, move_history=None):
         cells = tuple(tuple(row) for row in board.snapshot())
         return cls(
             cells=cells,
@@ -51,4 +56,5 @@ class GameSnapshot:
             recent_arrivals=recent_arrivals,
             clock=clock,
             winner=winner,
+            move_history=move_history or {},
         )

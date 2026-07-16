@@ -6,6 +6,7 @@ import numpy as np
 from view.img import Img
 from view.piece_assets import load_all_piece_configs, sprite_path
 from view.animation import compute_piece_views
+from view.notation import move_notation
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -19,6 +20,20 @@ GAME_OVER_DIM_ALPHA = 0.55
 GAME_OVER_TEXT_COLOR = (255, 255, 255, 255)  # BGRA white
 GAME_OVER_LINE_GAP = 30
 COLOR_NAMES = {"w": "WHITE", "b": "BLACK"}
+
+# Move-history sidebar, drawn to the right of the board. One column per
+# color (however many config.COLORS defines), each a scrolling-from-the-
+# bottom list of that color's accepted moves.
+SIDEBAR_WIDTH = 240
+SIDEBAR_BG_COLOR = (40, 40, 40, 255)  # BGRA dark gray
+SIDEBAR_PADDING = 14
+SIDEBAR_COLUMN_GAP = 10
+SIDEBAR_HEADER_COLOR = (0, 215, 255, 255)  # BGRA amber
+SIDEBAR_HEADER_FONT_SCALE = 0.6
+SIDEBAR_HEADER_HEIGHT = 34
+SIDEBAR_TEXT_COLOR = (230, 230, 230, 255)  # BGRA near-white
+SIDEBAR_TEXT_FONT_SCALE = 0.5
+SIDEBAR_LINE_HEIGHT = 22
 
 
 class GraphicsRenderer:
@@ -49,7 +64,7 @@ class GraphicsRenderer:
             sprite.draw_on(canvas, int(view.x), int(view.y))
         if snapshot.game_over:
             self._draw_game_over_banner(canvas, snapshot)
-        return canvas
+        return self._with_move_history_sidebar(canvas, snapshot)
 
     def _board_canvas(self, width, height):
         cell = self._config.CELL_SIZE
@@ -122,3 +137,36 @@ class GraphicsRenderer:
             y += text_h
             canvas.put_text(text, x, y, scale, GAME_OVER_TEXT_COLOR, thickness)
             y += GAME_OVER_LINE_GAP
+
+    def _with_move_history_sidebar(self, board_canvas, snapshot):
+        """Returns a new, wider canvas: the board unchanged on the left, a
+        move-history panel appended on the right - one column per color in
+        `config.COLORS`, so this works for any number of colors, not just
+        two."""
+        board_h, board_w = board_canvas.img.shape[:2]
+        panel = Img()
+        panel.img = np.full((board_h, board_w + SIDEBAR_WIDTH, 4), SIDEBAR_BG_COLOR, dtype=board_canvas.img.dtype)
+        panel.img[:, :board_w] = board_canvas.img
+        self._draw_move_history(panel, snapshot, board_w, board_h)
+        return panel
+
+    def _draw_move_history(self, canvas, snapshot, x_offset, panel_height):
+        colors = self._config.COLORS
+        if not colors:
+            return
+
+        column_width = (SIDEBAR_WIDTH - 2 * SIDEBAR_PADDING - (len(colors) - 1) * SIDEBAR_COLUMN_GAP) // len(colors)
+        max_lines = max(0, (panel_height - SIDEBAR_HEADER_HEIGHT - SIDEBAR_PADDING) // SIDEBAR_LINE_HEIGHT)
+
+        for i, color in enumerate(colors):
+            col_x = x_offset + SIDEBAR_PADDING + i * (column_width + SIDEBAR_COLUMN_GAP)
+            header = COLOR_NAMES.get(color, color.upper())
+            canvas.put_text(header, col_x, SIDEBAR_PADDING + 16,
+                             SIDEBAR_HEADER_FONT_SCALE, SIDEBAR_HEADER_COLOR, 2)
+
+            records = snapshot.move_history.get(color, ())[-max_lines:] if max_lines else ()
+            y = SIDEBAR_HEADER_HEIGHT + SIDEBAR_PADDING
+            for record in records:
+                text = move_notation(record, snapshot.height)
+                canvas.put_text(text, col_x, y, SIDEBAR_TEXT_FONT_SCALE, SIDEBAR_TEXT_COLOR, 1)
+                y += SIDEBAR_LINE_HEIGHT

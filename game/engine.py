@@ -1,4 +1,4 @@
-from game.models import MoveResult
+from game.models import MoveResult, MoveRecord
 from rules.reasons import Reason
 from view.snapshot import GameSnapshot
 
@@ -26,10 +26,18 @@ class GameEngine:
         self._config = config
         self._game_over = False
         self._winner = None
+        self._move_history = {color: [] for color in config.COLORS}
 
     @property
     def game_over(self):
         return self._game_over
+
+    @property
+    def move_history(self):
+        """Accepted moves so far, per color - read-only, in the order each
+        color's moves were accepted (there are no turns, so the two lists
+        advance independently)."""
+        return {color: tuple(moves) for color, moves in self._move_history.items()}
 
     @property
     def winner(self):
@@ -72,7 +80,9 @@ class GameEngine:
         if not self._config.ALLOW_CONCURRENT_MOVES and self._arbiter.has_active_motion():
             return MoveResult(False, Reason.MOTION_IN_PROGRESS)
 
-        self._arbiter.start_move(self._board.get(*start), start, end)
+        piece = self._board.get(*start)
+        self._arbiter.start_move(piece, start, end)
+        self._move_history[piece[0]].append(MoveRecord(piece, start, end))
         return MoveResult(True, Reason.OK)
 
     def request_jump(self, cell):
@@ -99,6 +109,7 @@ class GameEngine:
             recent_arrivals=self._arbiter.recent_arrivals,
             clock=self._arbiter.clock,
             winner=self._winner,
+            move_history=self.move_history,
         )
 
     def render(self, renderer):
@@ -109,9 +120,15 @@ class GameEngine:
 
     def _apply_events(self, events):
         """React to arrivals reported by the arbiter. The arbiter reports what
-        was captured; the engine owns whether that ends the game."""
+        was captured; the engine owns whether that ends the game.
+
+        Events arrive in chronological order, so the first one that ends the
+        game is the true first one - stop right there instead of letting a
+        later event in the same batch silently overwrite `_winner`.
+        """
         for event in events:
             if self._win_condition.is_game_over(event.captured):
                 self._game_over = True
                 captured_color = event.captured[0]
                 self._winner = next(c for c in self._config.COLORS if c != captured_color)
+                break

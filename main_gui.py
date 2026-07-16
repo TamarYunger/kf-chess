@@ -112,10 +112,15 @@ def run_gui(board_lines=None, config=settings):
             last_time = now
             engine.wait(dt_ms)
 
+            legal_destinations = (
+                engine.legal_destinations(controller.selected)
+                if controller.selected is not None else frozenset()
+            )
             snapshot = dataclasses.replace(
                 engine.snapshot(),
                 selected=controller.selected,
                 rejection_reason=controller.last_rejection,
+                legal_destinations=legal_destinations,
             )
             canvas = renderer.render(snapshot)
             cv2.imshow(WINDOW_NAME, canvas.img)

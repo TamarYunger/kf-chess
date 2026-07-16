@@ -22,6 +22,16 @@ GAME_OVER_TEXT_COLOR = (255, 255, 255, 255)  # BGRA white
 GAME_OVER_LINE_GAP = 30
 COLOR_NAMES = {"w": "WHITE", "b": "BLACK"}
 
+# Highlights for the selected piece's legal destinations: a dot centered on
+# an empty cell it could move to, or a ring around a cell it could capture
+# on - a centered dot would be invisible under that cell's piece sprite,
+# since sprites are drawn after this.
+LEGAL_MOVE_DOT_COLOR = (0, 200, 0)  # BGR green
+LEGAL_MOVE_DOT_ALPHA = 0.55
+LEGAL_MOVE_DOT_RADIUS_FRACTION = 0.16
+LEGAL_CAPTURE_RING_COLOR = (0, 120, 255, 255)  # BGRA orange
+LEGAL_CAPTURE_RING_THICKNESS = 4
+
 # A transient bar along the bottom of the board explaining why the last
 # click/jump did nothing - cleared as soon as any command succeeds (see
 # Controller.last_rejection). Never shown together with the game-over
@@ -82,6 +92,8 @@ class GraphicsRenderer:
         canvas = self._board_canvas(snapshot.width, snapshot.height)
         if snapshot.selected is not None:
             self._draw_selection(canvas, snapshot.selected)
+        for cell in snapshot.legal_destinations:
+            self._draw_legal_destination(canvas, snapshot, cell)
         for view in compute_piece_views(snapshot, self._piece_configs, self._config):
             if view.rest_fraction:
                 self._draw_rest_overlay(canvas, view.cell, view.rest_fraction)
@@ -122,6 +134,31 @@ class GraphicsRenderer:
         top_left = (col * cell_size, row * cell_size)
         bottom_right = ((col + 1) * cell_size, (row + 1) * cell_size)
         cv2.rectangle(canvas.img, top_left, bottom_right, SELECTION_COLOR, SELECTION_THICKNESS)
+
+    def _draw_legal_destination(self, canvas, snapshot, cell):
+        row, col = cell
+        if snapshot.cells[row][col] == self._config.EMPTY_CELL:
+            self._draw_legal_move_dot(canvas, row, col)
+        else:
+            self._draw_legal_capture_ring(canvas, row, col)
+
+    def _draw_legal_move_dot(self, canvas, row, col):
+        cell_size = self._config.CELL_SIZE
+        radius = max(1, int(cell_size * LEGAL_MOVE_DOT_RADIUS_FRACTION))
+        cx = col * cell_size + cell_size // 2
+        cy = row * cell_size + cell_size // 2
+
+        region = canvas.img[cy - radius:cy + radius, cx - radius:cx + radius, :3]
+        overlay = region.copy()
+        cv2.circle(overlay, (radius, radius), radius, LEGAL_MOVE_DOT_COLOR, -1)
+        blended = region.astype(np.float32) * (1 - LEGAL_MOVE_DOT_ALPHA) + overlay.astype(np.float32) * LEGAL_MOVE_DOT_ALPHA
+        region[:] = blended.astype(region.dtype)
+
+    def _draw_legal_capture_ring(self, canvas, row, col):
+        cell_size = self._config.CELL_SIZE
+        top_left = (col * cell_size, row * cell_size)
+        bottom_right = ((col + 1) * cell_size, (row + 1) * cell_size)
+        cv2.rectangle(canvas.img, top_left, bottom_right, LEGAL_CAPTURE_RING_COLOR, LEGAL_CAPTURE_RING_THICKNESS)
 
     def _draw_rest_overlay(self, canvas, cell, rest_fraction):
         """Colors the resting piece's cell, receding from the top down as

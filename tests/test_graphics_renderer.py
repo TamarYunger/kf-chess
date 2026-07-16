@@ -84,6 +84,34 @@ def test_move_history_panel_has_one_column_per_extra_color():
     assert canvas.img.shape[:2] == (3 * settings.CELL_SIZE, SIDE_PANEL_WIDTH + board_w + SIDE_PANEL_WIDTH)
 
 
+def test_legal_move_dot_is_drawn_on_an_empty_destination_cell():
+    renderer = make_renderer()
+    board = Board([["wR", ".", "."], [".", ".", "."], [".", ".", "."]])
+    no_highlight_snap = GameSnapshot.from_board(board, game_over=False)
+    highlight_snap = GameSnapshot.from_board(board, game_over=False, legal_destinations=frozenset({(0, 1)}))
+
+    no_highlight_canvas = renderer.render(no_highlight_snap)
+    highlight_canvas = renderer.render(highlight_snap)
+
+    board_w = 3 * settings.CELL_SIZE
+    left = SIDE_PANEL_WIDTH
+    assert not (no_highlight_canvas.img[:, left:left + board_w] == highlight_canvas.img[:, left:left + board_w]).all()
+
+
+def test_legal_capture_ring_is_drawn_on_an_occupied_destination_cell():
+    renderer = make_renderer()
+    board = Board([["wR", ".", "bN"], [".", ".", "."], [".", ".", "."]])
+    no_highlight_snap = GameSnapshot.from_board(board, game_over=False)
+    highlight_snap = GameSnapshot.from_board(board, game_over=False, legal_destinations=frozenset({(0, 2)}))
+
+    no_highlight_canvas = renderer.render(no_highlight_snap)
+    highlight_canvas = renderer.render(highlight_snap)
+
+    board_w = 3 * settings.CELL_SIZE
+    left = SIDE_PANEL_WIDTH
+    assert not (no_highlight_canvas.img[:, left:left + board_w] == highlight_canvas.img[:, left:left + board_w]).all()
+
+
 def test_game_over_banner_dims_the_board_overall():
     # The checkerboard background means roughly half the canvas is bright;
     # dimming that dominates the mean brightness even though the banner

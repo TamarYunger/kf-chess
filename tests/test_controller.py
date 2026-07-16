@@ -97,6 +97,31 @@ def test_next_command_clears_a_previous_rejection():
     assert controller.last_rejection is None
 
 
+def test_reselecting_after_a_rejection_clears_the_banner_immediately():
+    # Regression: the banner used to survive a bare re-select (a first
+    # click alone, with no second click yet) - it only cleared once a full
+    # second move completed, making it look "stuck" in between.
+    controller, engine, board = make_controller([["wN", ".", "."], [".", ".", "."], [".", ".", "."]])
+    controller.click(*cell_to_pixel(0, 0))
+    controller.click(*cell_to_pixel(0, 1))  # illegal knight move, rejected
+    assert controller.last_rejection is not None
+
+    controller.click(*cell_to_pixel(0, 0))  # re-select the same piece
+    assert controller.selected == (0, 0)
+    assert controller.last_rejection is None
+
+
+def test_first_click_after_a_rejection_clears_the_banner_even_when_nothing_is_selected():
+    controller, engine, board = make_controller([["wN", ".", "."], [".", ".", "."], [".", ".", "."]])
+    controller.click(*cell_to_pixel(0, 0))
+    controller.click(*cell_to_pixel(0, 1))  # illegal knight move, rejected
+    assert controller.last_rejection is not None
+
+    controller.click(*cell_to_pixel(2, 2))  # empty cell - nothing to select
+    assert controller.selected is None
+    assert controller.last_rejection is None
+
+
 def test_clicking_another_friendly_piece_reselects():
     controller, engine, board = make_controller([["wR", ".", "wK"], [".", ".", "."]])
     controller.click(*cell_to_pixel(0, 0))

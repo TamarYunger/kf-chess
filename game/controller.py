@@ -37,6 +37,9 @@ class Controller:
         if self._selected is None:
             # First click selects a piece if that cell can be a move source.
             # can_select() settles pending arrivals and refuses after game over.
+            # Clears any stale rejection banner either way: this is a fresh
+            # attempt, not a continuation of whatever was last rejected.
+            self._last_rejection = None
             if self._engine.can_select(cell):
                 self._selected = cell
             return

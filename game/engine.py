@@ -27,6 +27,7 @@ class GameEngine:
         self._game_over = False
         self._winner = None
         self._move_history = {color: [] for color in config.COLORS}
+        self._score = {color: 0 for color in config.COLORS}
 
     @property
     def game_over(self):
@@ -38,6 +39,13 @@ class GameEngine:
         color's moves were accepted (there are no turns, so the two lists
         advance independently)."""
         return {color: tuple(moves) for color, moves in self._move_history.items()}
+
+    @property
+    def score(self):
+        """Points accumulated so far per color, from captures it made -
+        read-only. King captures earn no score (see config.PIECE_VALUES);
+        that capture already ends the game via the win condition."""
+        return dict(self._score)
 
     @property
     def winner(self):
@@ -119,6 +127,7 @@ class GameEngine:
             clock=self._arbiter.clock,
             winner=self._winner,
             move_history=self.move_history,
+            score=self.score,
         )
 
     def render(self, renderer):
@@ -129,13 +138,17 @@ class GameEngine:
 
     def _apply_events(self, events):
         """React to arrivals reported by the arbiter. The arbiter reports what
-        was captured; the engine owns whether that ends the game.
+        was captured; the engine owns whether that ends the game (and, for a
+        capture, how much it's worth to the capturing color's score).
 
         Events arrive in chronological order, so the first one that ends the
         game is the true first one - stop right there instead of letting a
         later event in the same batch silently overwrite `_winner`.
         """
         for event in events:
+            if event.captured is not None:
+                capturer_color = event.piece[0]
+                self._score[capturer_color] += self._config.PIECE_VALUES[event.captured[1]]
             if self._win_condition.is_game_over(event.captured):
                 self._game_over = True
                 captured_color = event.captured[0]

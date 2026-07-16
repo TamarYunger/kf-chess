@@ -27,6 +27,9 @@ class GameSnapshot:
     `move_history` maps each color to its tuple of accepted MoveRecords, for
     a renderer that wants to display a move log; defaults to empty so
     existing callers that don't care about it are unaffected.
+
+    `score` maps each color to its accumulated capture points so far;
+    defaults to empty for the same reason.
     """
 
     cells: tuple
@@ -40,10 +43,12 @@ class GameSnapshot:
     clock: int = 0
     winner: str | None = None
     move_history: dict = field(default_factory=dict)
+    score: dict = field(default_factory=dict)
 
     @classmethod
     def from_board(cls, board, game_over, selected=None, moves=(), jumps=(),
-                    recent_arrivals=(), clock=0, winner=None, move_history=None):
+                    recent_arrivals=(), clock=0, winner=None, move_history=None,
+                    score=None):
         cells = tuple(tuple(row) for row in board.snapshot())
         return cls(
             cells=cells,
@@ -57,4 +62,5 @@ class GameSnapshot:
             clock=clock,
             winner=winner,
             move_history=move_history or {},
+            score=score or {},
         )

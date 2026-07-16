@@ -300,6 +300,46 @@ def test_busy_source_is_rejected_while_that_piece_is_moving():
     assert result.reason == Reason.BUSY_SOURCE
 
 
+def test_legal_destinations_for_a_rook_on_an_empty_board():
+    engine, board = make_engine([["wR", ".", "."], [".", ".", "."], [".", ".", "."]])
+    assert engine.legal_destinations((0, 0)) == {(0, 1), (0, 2), (1, 0), (2, 0)}
+
+
+def test_legal_destinations_stops_before_a_friendly_blocker():
+    engine, board = make_engine([["wR", "wP", "."]])
+    assert engine.legal_destinations((0, 0)) == set()
+
+
+def test_legal_destinations_includes_but_does_not_pass_an_enemy_blocker():
+    engine, board = make_engine([["wR", "bP", "."]])
+    assert engine.legal_destinations((0, 0)) == {(0, 1)}
+
+
+def test_legal_destinations_is_empty_after_game_over():
+    rows = [["wR", ".", "bK"], ["bR", ".", "."], [".", ".", "."]]
+    engine, board = make_engine(rows)
+    engine.request_move((0, 0), (0, 2))
+    engine.wait(2 * settings.MOVE_DURATION)  # captures bK -> game over
+    assert engine.legal_destinations((1, 0)) == set()
+
+
+def test_legal_destinations_excludes_a_cell_contested_by_a_same_color_move():
+    rows = [["wR", ".", "."], [".", ".", "."], ["wR", ".", "."]]
+    engine, board = make_engine(rows)
+    engine.request_move((0, 0), (0, 2))  # first rook already heading to (0, 2)
+
+    # The second rook could otherwise reach (0, 2) too (same column), but
+    # that destination is contested by the first rook's own color.
+    assert (0, 2) not in engine.legal_destinations((2, 0))
+
+
+def test_legal_destinations_empty_when_concurrent_moves_disabled_and_another_move_active():
+    rows = [["wR", ".", "."], [".", ".", "."], ["wR", ".", "."]]
+    engine, board = make_engine(rows, config=config_with(ALLOW_CONCURRENT_MOVES=False))
+    engine.request_move((0, 0), (0, 2))
+    assert engine.legal_destinations((2, 0)) == set()
+
+
 def test_can_select_returns_false_after_game_over():
     rows = [["wR", ".", "bK"], ["bR", ".", "."], [".", ".", "."]]
     engine, board = make_engine(rows)

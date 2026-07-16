@@ -19,6 +19,11 @@ class GameSnapshot:
     most recent command was refused, populated by whoever owns that state
     (the Controller) - the engine leaves it None.
 
+    `legal_destinations` is the set of cells the currently selected piece
+    could legally move to, for a renderer to highlight - empty whenever
+    nothing is selected; the engine leaves it empty too, since it depends
+    on `selected` which the engine doesn't own.
+
     `moves`, `jumps`, `recent_arrivals` and `clock` carry the arbiter's
     real-time motion state (all read-only, mirroring `cells`) so a graphical
     renderer can animate in-flight pieces; the text renderer ignores them.
@@ -42,6 +47,7 @@ class GameSnapshot:
     game_over: bool
     selected: tuple | None = None
     rejection_reason: str | None = None
+    legal_destinations: frozenset = field(default_factory=frozenset)
     moves: tuple = ()
     jumps: tuple = ()
     recent_arrivals: tuple = ()
@@ -53,7 +59,7 @@ class GameSnapshot:
     @classmethod
     def from_board(cls, board, game_over, selected=None, moves=(), jumps=(),
                     recent_arrivals=(), clock=0, winner=None, move_history=None,
-                    score=None, rejection_reason=None):
+                    score=None, rejection_reason=None, legal_destinations=None):
         cells = tuple(tuple(row) for row in board.snapshot())
         return cls(
             cells=cells,
@@ -62,6 +68,7 @@ class GameSnapshot:
             game_over=game_over,
             selected=selected,
             rejection_reason=rejection_reason,
+            legal_destinations=legal_destinations or frozenset(),
             moves=moves,
             jumps=jumps,
             recent_arrivals=recent_arrivals,

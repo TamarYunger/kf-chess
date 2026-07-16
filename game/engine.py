@@ -73,6 +73,32 @@ class GameEngine:
             return False
         return not self.is_busy(cell) and not self._board.is_empty(*cell)
 
+    def legal_destinations(self, start):
+        """Every cell the piece at `start` could legally move to right now -
+        for highlighting once it's selected. Empty once the game is over,
+        or (with ALLOW_CONCURRENT_MOVES off) another move is already active
+        - the same guards request_move applies before delegating to
+        RuleEngine, so every highlighted cell is actually clickable right
+        now. Excludes any cell already targeted by another of this piece's
+        own color (see DESTINATION_CONTESTED in request_move) for the same
+        reason.
+        """
+        self._apply_events(self._arbiter.resolve())
+        if self._game_over:
+            return frozenset()
+        if not self._config.ALLOW_CONCURRENT_MOVES and self._arbiter.has_active_motion():
+            return frozenset()
+
+        piece = self._board.get(*start)
+        contested = {move.end for move in self._arbiter.active_moves if move.piece[0] == piece[0]}
+        return frozenset(
+            (row, col)
+            for row in range(self._board.height)
+            for col in range(self._board.width)
+            if (row, col) not in contested
+            and self._rule_engine.validate_move(self._board, start, (row, col)).is_valid
+        )
+
     def request_move(self, start, end):
         self._apply_events(self._arbiter.resolve())
         if self._game_over:

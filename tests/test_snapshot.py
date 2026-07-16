@@ -21,6 +21,18 @@ def test_from_board_carries_game_over_and_selected():
     assert snap.selected == (0, 0)
 
 
+def test_from_board_defaults_legal_destinations_to_empty_frozenset():
+    board = Board([["wK", "."]])
+    snap = GameSnapshot.from_board(board, game_over=False)
+    assert snap.legal_destinations == frozenset()
+
+
+def test_from_board_carries_legal_destinations_when_passed():
+    board = Board([["wK", "."]])
+    snap = GameSnapshot.from_board(board, game_over=False, legal_destinations=frozenset({(0, 1)}))
+    assert snap.legal_destinations == frozenset({(0, 1)})
+
+
 def test_snapshot_is_isolated_from_later_board_mutation():
     board = Board([["wK", "."], [".", "."]])
     snap = GameSnapshot.from_board(board, game_over=False)

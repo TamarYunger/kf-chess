@@ -162,8 +162,9 @@ class GraphicsRenderer:
 
         for i, color in enumerate(colors):
             col_x = x_offset + SIDEBAR_PADDING + i * (column_width + SIDEBAR_COLUMN_GAP)
-            header = COLOR_NAMES.get(color, color.upper())
-            canvas.put_text(header, col_x, SIDEBAR_PADDING + 16,
+            name = COLOR_NAMES.get(color, color.upper())
+            points = snapshot.score.get(color, 0)
+            canvas.put_text(f"{name}  {points}", col_x, SIDEBAR_PADDING + 16,
                              SIDEBAR_HEADER_FONT_SCALE, SIDEBAR_HEADER_COLOR, 2)
 
             records = snapshot.move_history.get(color, ())[-max_lines:] if max_lines else ()

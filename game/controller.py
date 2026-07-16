@@ -15,10 +15,18 @@ class Controller:
         self._engine = engine
         self._mapper = board_mapper
         self._selected = None
+        self._last_rejection = None
 
     @property
     def selected(self):
         return self._selected
+
+    @property
+    def last_rejection(self):
+        """The Reason a move/jump was most recently rejected for, or None if
+        the last attempted command succeeded (or nothing has been attempted
+        yet) - purely UI feedback, cleared on the next successful command."""
+        return self._last_rejection
 
     def click(self, x, y):
         cell = self._mapper.pixel_to_cell(x, y)
@@ -44,7 +52,8 @@ class Controller:
         cell = self._mapper.pixel_to_cell(x, y)
         if cell is None:
             return
-        self._engine.request_jump(cell)
+        result = self._engine.request_jump(cell)
+        self._last_rejection = None if result.is_accepted else result.reason
 
     def _resolve_selection(self, result, cell):
         # Clicking another of your own pieces re-selects it (unless that piece
@@ -53,5 +62,7 @@ class Controller:
         # by another motion, off-limits after game over, or an unusable source).
         if result.reason == Reason.FRIENDLY_DESTINATION and self._engine.can_select(cell):
             self._selected = cell
+            self._last_rejection = None
         else:
             self._selected = None
+            self._last_rejection = None if result.is_accepted else result.reason

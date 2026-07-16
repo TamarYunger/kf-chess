@@ -5,6 +5,8 @@ formatting is unit-testable without a canvas, and reusable by any future
 renderer (e.g. a text move log) without duplicating it.
 """
 
+KIND_NAMES = {"P": "Pawn", "N": "Knight", "B": "Bishop", "R": "Rook", "Q": "Queen", "K": "King"}
+
 
 def square_name(cell, board_height):
     """(row, col) -> algebraic square name (e.g. "e2"). Rank counts up from
@@ -17,13 +19,18 @@ def square_name(cell, board_height):
 
 
 def move_notation(record, board_height):
-    """"e2-e4" for a pawn, "Ng1-f3" for any other kind - the piece-kind
-    letter is whatever the rule registry uses for that kind (see
-    PieceRuleRegistry), so custom piece kinds are rendered automatically.
-    Pawns ("P") omit the letter, matching standard chess notation.
+    """"Pawn e2-e4", "Knight g1-f3" - the full kind name is used (not the
+    single-letter code) so the piece that moved is unambiguous at a
+    glance. A kind absent from KIND_NAMES (a custom piece) falls back to
+    its own letter as-is, so custom piece kinds still render without a
+    KeyError. If the move promoted (`record.promoted_to` is set), an
+    "= Queen"-style suffix is appended, mirroring standard chess notation.
     """
-    kind = record.piece[1]
-    prefix = "" if kind == "P" else kind
+    name = KIND_NAMES.get(record.piece[1], record.piece[1])
     start = square_name(record.start, board_height)
     end = square_name(record.end, board_height)
-    return f"{prefix}{start}-{end}"
+    text = f"{name} {start}-{end}"
+    if record.promoted_to is not None:
+        promoted_name = KIND_NAMES.get(record.promoted_to, record.promoted_to)
+        text += f" = {promoted_name}"
+    return text

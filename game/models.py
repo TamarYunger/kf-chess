@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 
@@ -21,8 +23,14 @@ class MoveRecord:
 
     Recorded at accept time (`GameEngine.request_move`), not on arrival - it
     logs what was committed, the same moment standard chess notation would.
+
+    `promoted_to` is filled in later, if at all - only once the piece
+    actually arrives and `PromotionRule` transforms it - so it starts as
+    None on every record and is patched in place by the engine when the
+    matching arrival reports a different final piece.
     """
 
     piece: str
     start: tuple
     end: tuple
+    promoted_to: str | None = None

@@ -261,6 +261,24 @@ def test_injected_promotion_rule_overrides_default_behaviour():
     assert board.get(0, 0) == "wP"
 
 
+def test_promotion_is_recorded_in_move_history():
+    rows = [[".", ".", "."], ["wP", ".", "."], [".", ".", "."]]
+    engine, board = make_engine(rows)
+    engine.request_move((1, 0), (0, 0))
+    engine.wait(settings.MOVE_DURATION)
+
+    record = engine.move_history["w"][0]
+    assert record.promoted_to == "Q"
+
+
+def test_non_promoting_move_has_no_promoted_to():
+    engine, board = make_engine([["wR", ".", "."]])
+    engine.request_move((0, 0), (0, 2))
+    engine.wait(2 * settings.MOVE_DURATION)
+
+    assert engine.move_history["w"][0].promoted_to is None
+
+
 def test_render_returns_current_board_text():
     engine, board = make_engine([["wK", "."], [".", "bK"]])
     text = engine.render(BoardRenderer())

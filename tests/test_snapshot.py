@@ -84,6 +84,18 @@ def test_from_board_carries_move_history_when_passed():
     assert snap.move_history == history
 
 
+def test_from_board_defaults_rejection_reason_to_none():
+    board = Board([["wK", "."]])
+    snap = GameSnapshot.from_board(board, game_over=False)
+    assert snap.rejection_reason is None
+
+
+def test_from_board_carries_rejection_reason_when_passed():
+    board = Board([["wK", "."]])
+    snap = GameSnapshot.from_board(board, game_over=False, rejection_reason="destination_contested")
+    assert snap.rejection_reason == "destination_contested"
+
+
 def test_from_board_defaults_score_to_empty_dict():
     board = Board([["wK", "."]])
     snap = GameSnapshot.from_board(board, game_over=False)

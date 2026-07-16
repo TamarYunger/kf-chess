@@ -69,23 +69,18 @@ def with_synced_rest_durations(config):
     short_rest/long_rest sprites' own playback duration (frame_count/fps),
     so the gameplay cooldown always exactly matches how long the rest
     animation actually plays - taking the max across piece kinds in case a
-    future skin gives them differing lengths (today they're uniform)."""
+    future skin gives them differing lengths (today they're uniform).
+
+    Copies every field from `config` (not a fixed whitelist) so any new
+    config field added later reaches the GUI automatically, instead of
+    silently being missing until someone remembers to list it here too.
+    """
     pieces_root = PROJECT_ROOT / config.ASSETS_DIR / "pieces"
     piece_configs = load_all_piece_configs(pieces_root)
     short = max(state_duration_ms(cfgs["short_rest"]) for cfgs in piece_configs.values())
     long_ = max(state_duration_ms(cfgs["long_rest"]) for cfgs in piece_configs.values())
-    return types.SimpleNamespace(
-        CELL_SIZE=config.CELL_SIZE,
-        MOVE_DURATION=config.MOVE_DURATION,
-        JUMP_DURATION=config.JUMP_DURATION,
-        COLORS=config.COLORS,
-        PAWN_DIRECTION=config.PAWN_DIRECTION,
-        EMPTY_CELL=config.EMPTY_CELL,
-        ALLOW_CONCURRENT_MOVES=config.ALLOW_CONCURRENT_MOVES,
-        ASSETS_DIR=config.ASSETS_DIR,
-        SHORT_REST_DURATION=short,
-        LONG_REST_DURATION=long_,
-    )
+    overrides = {**vars(config), "SHORT_REST_DURATION": short, "LONG_REST_DURATION": long_}
+    return types.SimpleNamespace(**overrides)
 
 
 def run_gui(board_lines=None, config=settings):

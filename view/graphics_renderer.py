@@ -56,6 +56,8 @@ class GraphicsRenderer:
         size = (width * cell, height * cell)
         if self._board_base is None or self._board_base_size != size:
             self._board_base = Img().read(str(self._board_image_path), size=size)
+            if self._board_base.img.shape[2] == 3:
+                self._board_base.img = cv2.cvtColor(self._board_base.img, cv2.COLOR_BGR2BGRA)
             self._board_base_size = size
         canvas = Img()
         canvas.img = self._board_base.img.copy()

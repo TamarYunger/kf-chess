@@ -137,6 +137,78 @@ def test_enemy_tie_on_a_shared_destination_is_won_by_registration_order():
     assert board.get(0, 2) == "bR"
 
 
+def _empty_board():
+    return [["."] * 8 for _ in range(8)]
+
+
+def test_later_starting_move_stops_short_of_a_same_color_path_crossing():
+    # Queen a4->h4 (row 4, col 0 -> col 7) starts first; rook e1->e8
+    # (col 4, row 7 -> row 0) starts 1.5 durations later. Their paths cross
+    # at e4 = (4, 4). Even though the rook needs fewer steps (3, vs the
+    # queen's 4), its late start means it would actually reach (4, 4) after
+    # the queen does - so the rook is the one that stops, one cell short of
+    # the crossing, at e3 = (5, 4). The queen is unaffected.
+    arbiter, board = make_arbiter(_empty_board())
+    arbiter.start_move("wQ", (4, 0), (4, 7))
+    arbiter.advance_time(int(1.5 * settings.MOVE_DURATION))
+    arbiter.start_move("wR", (7, 4), (0, 4))
+
+    moves = {move.piece: move for move in arbiter.active_moves}
+    assert moves["wR"].end == (5, 4)
+    assert moves["wR"].arrival == int(1.5 * settings.MOVE_DURATION) + 2 * settings.MOVE_DURATION
+    assert moves["wQ"].end == (4, 7)
+
+
+def test_knight_shaped_move_is_never_shortened_by_a_path_crossing():
+    # A knight's move is L-shaped, not straight/diagonal, so it has no path
+    # at all - it is immune to path-crossing checks even when its own
+    # destination sits right on another active same-color move's path.
+    arbiter, board = make_arbiter(_empty_board())
+    arbiter.start_move("wR", (4, 0), (4, 7))   # long horizontal move along row 4
+    arbiter.start_move("wN", (6, 3), (4, 4))   # knight move landing on the rook's path
+
+    knight = next(move for move in arbiter.active_moves if move.piece == "wN")
+    assert knight.end == (4, 4)
+    assert knight.path == ()
+    assert knight.arrival == 2 * settings.MOVE_DURATION  # unaffected Chebyshev timing
+
+
+def test_paths_that_never_cross_are_unaffected():
+    arbiter, board = make_arbiter(_empty_board())
+    arbiter.start_move("wR", (0, 0), (0, 5))
+    arbiter.start_move("wR", (7, 0), (7, 5))
+
+    ends = {move.end for move in arbiter.active_moves}
+    assert ends == {(0, 5), (7, 5)}
+
+
+def test_different_color_path_crossing_is_never_shortened():
+    # The path-crossing rule only applies between same-color moves - an
+    # enemy crossing the same path is a different, already-handled concern
+    # (a same-cell race), not this one.
+    arbiter, board = make_arbiter(_empty_board())
+    arbiter.start_move("wQ", (4, 0), (4, 7))
+    arbiter.advance_time(int(1.5 * settings.MOVE_DURATION))
+    arbiter.start_move("bR", (7, 4), (0, 4))   # enemy rook, same crossing geometry
+
+    rook = next(move for move in arbiter.active_moves if move.piece == "bR")
+    assert rook.end == (0, 4)
+
+
+def test_shortest_crossing_wins_when_a_path_crosses_multiple_moves():
+    # The horizontal rook's path crosses both verticals; the crossing with
+    # the first vertical is closer to its start (index 1) than the crossing
+    # with the second (index 4). Even though it would also need to stop for
+    # the second, the earlier, more restrictive crossing wins.
+    arbiter, board = make_arbiter(_empty_board())
+    arbiter.start_move("wR", (5, 2), (3, 2))   # crosses row 4 at col 2, close by
+    arbiter.start_move("wR", (5, 5), (3, 5))   # crosses row 4 at col 5, further along
+    arbiter.start_move("wR", (4, 0), (4, 7))   # horizontal - crosses both
+
+    horizontal = next(move for move in arbiter.active_moves if move.start == (4, 0))
+    assert horizontal.end == (4, 1)
+
+
 def test_clock_advances_with_time():
     arbiter, board = make_arbiter([["wR", ".", "."]])
     assert arbiter.clock == 0

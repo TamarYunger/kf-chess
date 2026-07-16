@@ -5,6 +5,28 @@ from dataclasses import dataclass
 from realtime.models import Move, Jump, Arrival
 
 
+def _straight_line_path(start, end):
+    """Cells strictly after `start` up to and including `end`, walked one
+    step at a time in a straight line or diagonal. Empty for any other
+    shape (e.g. a knight's L) - those pieces have no intermediate squares
+    to collide along, so they are never subject to path-crossing checks.
+    """
+    sr, sc = start
+    er, ec = end
+    dr = (er > sr) - (er < sr)
+    dc = (ec > sc) - (ec < sc)
+    if dr != 0 and dc != 0 and abs(er - sr) != abs(ec - sc):
+        return ()
+    r, c = sr + dr, sc + dc
+    cells = []
+    while (r, c) != (er, ec):
+        cells.append((r, c))
+        r += dr
+        c += dc
+    cells.append((er, ec))
+    return tuple(cells)
+
+
 @dataclass(frozen=True)
 class ArrivalEvent:
     """What the arbiter reports back when a moving piece arrives.
@@ -90,7 +112,33 @@ class RealTimeArbiter:
         return self._clock < arrival.at + duration
 
     def start_move(self, piece, start, end):
-        self._active_moves.append(Move(piece, start, end, self._arrival_clock(start, end)))
+        """Registers a move, first checking whether its path crosses a
+        same-color move already active. If it does, and this new move would
+        reach the shared cell later, it is shortened to stop one cell short
+        of the crossing instead of continuing to `end`.
+
+        This only ever shortens the *new* move being registered here - an
+        already-active move that turns out to be the later one at some
+        future crossing is not (yet) retroactively shortened by this step.
+        """
+        start_time = self._clock
+        original_path = _straight_line_path(start, end)
+        path = self._shorten_for_crossings(piece, start_time, original_path) if original_path else ()
+
+        if path:
+            actual_end = path[-1]
+            arrival = start_time + len(path) * self._config.MOVE_DURATION
+        elif original_path:
+            # Straight-line move truncated all the way back to its own
+            # start - blocked before its first step, so it never actually
+            # goes anywhere.
+            actual_end, arrival = start, start_time
+        else:
+            # Not a straight line (e.g. a knight) - has no path to begin
+            # with, so it is never affected by path-crossing shortening.
+            actual_end, arrival = end, self._arrival_clock(start, end)
+
+        self._active_moves.append(Move(piece, start, actual_end, arrival, path))
 
     def start_jump(self, piece, cell):
         self._active_jumps.append(Jump(piece, cell, self._clock + self._config.JUMP_DURATION))
@@ -131,6 +179,30 @@ class RealTimeArbiter:
         number of squares on a straight/diagonal path (Chebyshev metric)."""
         distance = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
         return self._clock + distance * self._config.MOVE_DURATION
+
+    def _shorten_for_crossings(self, piece, start_time, path):
+        """Truncates `path` right before the earliest cell where it would
+        cross a same-color active move that reaches that shared cell no
+        later than this new mover does - that mover keeps going, this one
+        stops one cell short instead. Only moves with a non-empty `path` of
+        their own (i.e. also straight-line) can be crossed against.
+        """
+        color = piece[0]
+        duration = self._config.MOVE_DURATION
+        cutoff = None
+        for other in self._active_moves:
+            if other.piece[0] != color or not other.path:
+                continue
+            other_start_time = other.arrival - len(other.path) * duration
+            for i, cell in enumerate(path):
+                if cell not in other.path:
+                    continue
+                j = other.path.index(cell)
+                my_time = start_time + (i + 1) * duration
+                other_time = other_start_time + (j + 1) * duration
+                if my_time > other_time and (cutoff is None or i < cutoff):
+                    cutoff = i
+        return path if cutoff is None else path[:cutoff]
 
     def _settle_move(self, move):
         if self._is_intercepted(move):

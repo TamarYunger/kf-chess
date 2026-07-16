@@ -7,12 +7,19 @@ class Move:
 
     Owned by RealTimeArbiter, not Board: the board only stores logical
     occupancy, while an in-flight Move lives outside it until it arrives.
+
+    `path` is the sequence of cells strictly after `start` up to and
+    including `end`, walked in a straight line/diagonal - used only to
+    detect a same-color path crossing with another active move. It is empty
+    for any non-straight-line move (e.g. a knight's L-shape): those have no
+    intermediate squares, so they can never cross another move's path.
     """
 
     piece: str
     start: tuple
     end: tuple
     arrival: int
+    path: tuple = ()
 
 
 @dataclass(frozen=True)

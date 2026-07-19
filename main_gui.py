@@ -1,15 +1,13 @@
 """KungFu Chess - interactive graphical entry point.
 
 Separate from main.py (the script/test-driven CLI) so the existing tested
-batch path is untouched. Opens a cv2 window driven by the wall clock and
-mouse: single click selects/moves, double click jumps.
+batch path is untouched. Opens an Img-backed window driven by the wall clock
+and mouse: single click selects/moves, double click jumps.
 """
 import dataclasses
 import time
 import types
 from pathlib import Path
-
-import cv2
 
 from config import settings
 from rules.rule_registry import build_default_registry
@@ -21,6 +19,7 @@ from game.board_mapper import BoardMapper
 from game.engine import GameEngine
 from game.controller import Controller
 from view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
+from view.img import Img
 from view.piece_assets import load_all_piece_configs, state_duration_ms
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -95,14 +94,8 @@ def run_gui(board_lines=None, config=settings):
     )
     renderer = GraphicsRenderer(config)
 
-    def on_mouse(event, x, y, flags, userdata):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            controller.click(x, y)
-        elif event == cv2.EVENT_LBUTTONDBLCLK:
-            controller.jump(x, y)
-
-    cv2.namedWindow(WINDOW_NAME)
-    cv2.setMouseCallback(WINDOW_NAME, on_mouse)
+    Img.open_window(WINDOW_NAME)
+    Img.set_mouse_callback(WINDOW_NAME, on_click=controller.click, on_double_click=controller.jump)
 
     last_time = time.time()
     try:
@@ -123,15 +116,15 @@ def run_gui(board_lines=None, config=settings):
                 legal_destinations=legal_destinations,
             )
             canvas = renderer.render(snapshot)
-            cv2.imshow(WINDOW_NAME, canvas.img)
+            canvas.show_frame(WINDOW_NAME)
 
-            key = cv2.waitKey(16) & 0xFF
+            key = Img.wait_key(16)
             if key == 27:  # ESC
                 break
-            if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+            if not Img.is_window_visible(WINDOW_NAME):
                 break
     finally:
-        cv2.destroyAllWindows()
+        Img.close_all_windows()
 
 
 if __name__ == "__main__":  # pragma: no cover

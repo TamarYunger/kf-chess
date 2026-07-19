@@ -1,6 +1,6 @@
-import dataclasses
-
-from game.models import MoveResult, MoveRecord
+from game.events import EventBus
+from game.models import MoveResult
+from game.move_history import MoveHistory
 from game.snapshot import GameSnapshot
 from rules.reasons import Reason
 
@@ -28,7 +28,9 @@ class GameEngine:
         self._config = config
         self._game_over = False
         self._winner = None
-        self._move_history = {color: [] for color in config.COLORS}
+        self._events = EventBus()
+        self._move_history = MoveHistory(config.COLORS)
+        self._move_history.subscribe_to(self._events)
         self._score = {color: 0 for color in config.COLORS}
 
     @property
@@ -40,7 +42,7 @@ class GameEngine:
         """Accepted moves so far, per color - read-only, in the order each
         color's moves were accepted (there are no turns, so the two lists
         advance independently)."""
-        return {color: tuple(moves) for color, moves in self._move_history.items()}
+        return self._move_history.snapshot()
 
     @property
     def score(self):
@@ -127,7 +129,7 @@ class GameEngine:
             return MoveResult(False, Reason.DESTINATION_CONTESTED)
 
         self._arbiter.start_move(piece, start, end)
-        self._move_history[piece[0]].append(MoveRecord(piece, start, end))
+        self._events.publish("move_accepted", piece, start, end)
         return MoveResult(True, Reason.OK)
 
     def request_jump(self, cell):
@@ -174,7 +176,7 @@ class GameEngine:
         later event in the same batch silently overwrite `_winner`.
         """
         for event in events:
-            self._record_promotion(event)
+            self._events.publish("arrival", event)
             if event.captured is not None:
                 capturer_color = event.piece[0]
                 self._score[capturer_color] += self._config.PIECE_VALUES[event.captured[1]]
@@ -182,18 +184,4 @@ class GameEngine:
                 self._game_over = True
                 captured_color = event.captured[0]
                 self._winner = next(c for c in self._config.COLORS if c != captured_color)
-                break
-
-    def _record_promotion(self, event):
-        """Patches the move-history record this arrival corresponds to with
-        the promoted kind, if the piece that landed differs from the one
-        that set out - found by matching color + destination, searching the
-        most recent record first (that's always the one this event settled,
-        since two same-color moves can never target the same destination -
-        see the DESTINATION_CONTESTED guard in request_move)."""
-        history = self._move_history[event.piece[0]]
-        for i in range(len(history) - 1, -1, -1):
-            record = history[i]
-            if record.end == event.destination and record.piece[1] != event.piece[1]:
-                history[i] = dataclasses.replace(record, promoted_to=event.piece[1])
                 break

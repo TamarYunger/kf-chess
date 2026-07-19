@@ -478,3 +478,48 @@ def test_snapshot_carries_score():
     engine.wait(2 * settings.MOVE_DURATION)
 
     assert engine.snapshot().score == {"w": settings.PIECE_VALUES["N"], "b": 0}
+
+
+def test_capture_publishes_score_changed_on_the_event_bus():
+    engine, board = make_engine([["wR", ".", "bN"]])
+    received = []
+    engine.events.subscribe("score_changed", lambda *args: received.append(args))
+
+    engine.request_move((0, 0), (0, 2))
+    engine.wait(2 * settings.MOVE_DURATION)
+
+    assert received == [("w", settings.PIECE_VALUES["N"])]
+
+
+def test_king_capture_publishes_game_over_with_the_winner():
+    rows = [["wR", ".", "bK"], [".", ".", "."], [".", ".", "."]]
+    engine, board = make_engine(rows)
+    received = []
+    engine.events.subscribe("game_over", lambda winner: received.append(winner))
+
+    engine.request_move((0, 0), (0, 2))
+    engine.wait(2 * settings.MOVE_DURATION)
+
+    assert received == ["w"]
+
+
+def test_engine_shares_an_injected_event_bus_with_other_collaborators():
+    # A caller (e.g. a future server) can pass its own bus in, so it can
+    # subscribe before the engine exists and still catch every event -
+    # instead of only being able to reach an engine-owned bus afterwards.
+    from game.events import EventBus
+
+    shared_bus = EventBus()
+    board = Board([["wR", ".", "."]])
+    registry = build_default_registry(settings)
+    arbiter = RealTimeArbiter(board=board, promotion_rule=LastRankPromotion(settings.PAWN_DIRECTION), config=settings)
+    engine = GameEngine(
+        board=board,
+        rule_engine=RuleEngine(rule_registry=registry, config=settings),
+        arbiter=arbiter,
+        win_condition=KingCaptureWinCondition(),
+        config=settings,
+        events=shared_bus,
+    )
+
+    assert engine.events is shared_bus

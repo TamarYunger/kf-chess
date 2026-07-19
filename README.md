@@ -22,8 +22,8 @@ game/      models.py              - MoveResult + Reason (engine command-boundary
            board_mapper.py        - BoardMapper (pixel -> cell)
            controller.py          - Controller (selection state + click/jump dispatch)
            engine.py              - GameEngine (application-service coordinator)
-view/      snapshot.py            - GameSnapshot (read-only view model)
-           renderer.py            - snapshot -> text rendering
+           snapshot.py            - GameSnapshot (read-only view model, owned by the engine)
+view/      renderer.py            - snapshot -> text rendering
 tests/     test_*.py              - unit tests (pytest)
 main.py    entry point + dependency wiring
 ```
@@ -46,7 +46,7 @@ layer without touching the others:
   command boundary; owns the game-over guard and one-motion-at-a-time policy.
 - **Controller / BoardMapper** (`game/controller.py`, `game/board_mapper.py`) -
   translate pixels to cells and own selection state.
-- **View** (`view/`) - renders a read-only `GameSnapshot`, never the live board.
+- **View** (`view/`) - renders a read-only `GameSnapshot` (`game/snapshot.py`), never the live board.
 
 ## How the 4 requirements are addressed
 

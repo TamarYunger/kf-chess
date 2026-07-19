@@ -1,5 +1,5 @@
 from board.board import Board
-from view.snapshot import GameSnapshot
+from game.snapshot import GameSnapshot
 from view.renderer import BoardRenderer
 
 

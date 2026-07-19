@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from board.piece import color_of
 from realtime.models import Move, Jump, Arrival
 
 
@@ -187,11 +188,11 @@ class RealTimeArbiter:
         stops one cell short instead. Only moves with a non-empty `path` of
         their own (i.e. also straight-line) can be crossed against.
         """
-        color = piece[0]
+        color = color_of(piece)
         duration = self._config.MOVE_DURATION
         cutoff = None
         for other in self._active_moves:
-            if other.piece[0] != color or not other.path:
+            if color_of(other.piece) != color or not other.path:
                 continue
             other_start_time = other.arrival - len(other.path) * duration
             for i, cell in enumerate(path):
@@ -213,7 +214,7 @@ class RealTimeArbiter:
 
         r, c = move.end
         target = self._board.get(r, c)
-        if target != self._config.EMPTY_CELL and target[0] == move.piece[0]:
+        if target != self._config.EMPTY_CELL and color_of(target) == color_of(move.piece):
             return None
 
         captured = None if target == self._config.EMPTY_CELL else target
@@ -229,7 +230,7 @@ class RealTimeArbiter:
     def _is_intercepted(self, move):
         r, c = move.end
         return any(
-            jump.cell == (r, c) and jump.piece[0] != move.piece[0]
+            jump.cell == (r, c) and color_of(jump.piece) != color_of(move.piece)
             for jump in self._active_jumps
         )
 

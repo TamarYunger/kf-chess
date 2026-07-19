@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from board.piece import color_of, kind_of
 from rules.reasons import Reason
 from rules.movement_strategy import MoveContext
 
@@ -38,14 +39,14 @@ class RuleEngine:
 
         piece = board.get(*start)
         target = board.get(*end)
-        if target != self._config.EMPTY_CELL and target[0] == piece[0]:
+        if target != self._config.EMPTY_CELL and color_of(target) == color_of(piece):
             return MoveValidation(False, Reason.FRIENDLY_DESTINATION)
 
-        strategy = self._registry.get(piece[1])
+        strategy = self._registry.get(kind_of(piece))
         dr, dc = end[0] - start[0], end[1] - start[1]
         context = MoveContext(
             board=board,
-            color=piece[0],
+            color=color_of(piece),
             start=start,
             end=end,
             target_occupied=not board.is_empty(*end),

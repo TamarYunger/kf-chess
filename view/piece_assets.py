@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from board.piece import color_of, kind_of
+
 STATE_NAMES = ("idle", "move", "jump", "short_rest", "long_rest")
 
 
@@ -17,7 +19,7 @@ def token_to_folder(token):
     pack. This is the one seam that bridges the two conventions."""
     if len(token) != 2:
         raise InvalidTokenError(token)
-    color, kind = token[0], token[1]
+    color, kind = color_of(token), kind_of(token)
     return kind.upper() + color.upper()
 
 

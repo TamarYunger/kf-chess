@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 
+from board.piece import color_of, kind_of, make_piece
+
 
 class WinCondition(ABC):
     """Decides whether a capture ends the game (Strategy pattern).
@@ -16,7 +18,7 @@ class WinCondition(ABC):
 
 class KingCaptureWinCondition(WinCondition):
     def is_game_over(self, captured_piece):
-        return captured_piece is not None and captured_piece[1] == "K"
+        return captured_piece is not None and kind_of(captured_piece) == "K"
 
 
 class PromotionRule(ABC):
@@ -44,10 +46,10 @@ class LastRankPromotion(PromotionRule):
         self._promote_to = promote_to
 
     def promote(self, piece, row, board_height):
-        color, kind = piece[0], piece[1]
+        color, kind = color_of(piece), kind_of(piece)
         if kind != self._promotable_kind:
             return piece
         last_rank = 0 if self._directions[color] < 0 else board_height - 1
         if row == last_rank:
-            return color + self._promote_to
+            return make_piece(color, self._promote_to)
         return piece

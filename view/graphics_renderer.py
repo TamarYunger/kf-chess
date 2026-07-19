@@ -1,8 +1,5 @@
 from pathlib import Path
 
-import cv2
-import numpy as np
-
 from rules.reasons import Reason
 from view.img import Img
 from view.piece_assets import load_all_piece_configs, sprite_path
@@ -72,8 +69,8 @@ SIDE_PANEL_LINE_HEIGHT = 22
 
 
 class GraphicsRenderer:
-    """Renders a GameSnapshot onto a cv2/numpy canvas (an Img), the
-    graphical counterpart to BoardRenderer.render's plain text. Consumes
+    """Renders a GameSnapshot onto an Img canvas, the graphical counterpart
+    to BoardRenderer.render's plain text. Consumes
     only the read-only snapshot - never a live Board or arbiter - matching
     how the text renderer is kept isolated from the model.
     """
@@ -111,8 +108,7 @@ class GraphicsRenderer:
         size = (width * cell, height * cell)
         if self._board_base is None or self._board_base_size != size:
             self._board_base = Img().read(str(self._board_image_path), size=size)
-            if self._board_base.img.shape[2] == 3:
-                self._board_base.img = cv2.cvtColor(self._board_base.img, cv2.COLOR_BGR2BGRA)
+            self._board_base.to_bgra()
             self._board_base_size = size
         canvas = Img()
         canvas.img = self._board_base.img.copy()
@@ -133,7 +129,7 @@ class GraphicsRenderer:
         row, col = cell
         top_left = (col * cell_size, row * cell_size)
         bottom_right = ((col + 1) * cell_size, (row + 1) * cell_size)
-        cv2.rectangle(canvas.img, top_left, bottom_right, SELECTION_COLOR, SELECTION_THICKNESS)
+        canvas.rectangle(top_left, bottom_right, SELECTION_COLOR, SELECTION_THICKNESS)
 
     def _draw_legal_destination(self, canvas, snapshot, cell):
         row, col = cell
@@ -147,18 +143,13 @@ class GraphicsRenderer:
         radius = max(1, int(cell_size * LEGAL_MOVE_DOT_RADIUS_FRACTION))
         cx = col * cell_size + cell_size // 2
         cy = row * cell_size + cell_size // 2
-
-        region = canvas.img[cy - radius:cy + radius, cx - radius:cx + radius, :3]
-        overlay = region.copy()
-        cv2.circle(overlay, (radius, radius), radius, LEGAL_MOVE_DOT_COLOR, -1)
-        blended = region.astype(np.float32) * (1 - LEGAL_MOVE_DOT_ALPHA) + overlay.astype(np.float32) * LEGAL_MOVE_DOT_ALPHA
-        region[:] = blended.astype(region.dtype)
+        canvas.blend_circle(cx, cy, radius, LEGAL_MOVE_DOT_COLOR, LEGAL_MOVE_DOT_ALPHA)
 
     def _draw_legal_capture_ring(self, canvas, row, col):
         cell_size = self._config.CELL_SIZE
         top_left = (col * cell_size, row * cell_size)
         bottom_right = ((col + 1) * cell_size, (row + 1) * cell_size)
-        cv2.rectangle(canvas.img, top_left, bottom_right, LEGAL_CAPTURE_RING_COLOR, LEGAL_CAPTURE_RING_THICKNESS)
+        canvas.rectangle(top_left, bottom_right, LEGAL_CAPTURE_RING_COLOR, LEGAL_CAPTURE_RING_THICKNESS)
 
     def _draw_rest_overlay(self, canvas, cell, rest_fraction):
         """Colors the resting piece's cell, receding from the top down as
@@ -174,27 +165,19 @@ class GraphicsRenderer:
         right = left + cell_size
         top = row * cell_size + (cell_size - height)
         bottom = row * cell_size + cell_size
-
-        region = canvas.img[top:bottom, left:right, :3]
-        color = np.array(REST_OVERLAY_COLOR, dtype=np.float32)
-        blended = region.astype(np.float32) * (1 - REST_OVERLAY_MAX_ALPHA) + color * REST_OVERLAY_MAX_ALPHA
-        region[:] = blended.astype(region.dtype)
+        canvas.blend_rect(top, left, bottom, right, REST_OVERLAY_COLOR, REST_OVERLAY_MAX_ALPHA)
 
     def _draw_game_over_banner(self, canvas, snapshot):
-        img = canvas.img
-        h, w = img.shape[:2]
-
-        dim_region = img[:, :, :3]
-        dim_region[:] = (dim_region.astype(np.float32) * (1 - GAME_OVER_DIM_ALPHA)).astype(dim_region.dtype)
+        h, w = canvas.img.shape[:2]
+        canvas.blend_rect(0, 0, h, w, (0, 0, 0), GAME_OVER_DIM_ALPHA)
 
         lines = ["GAME OVER"]
         if snapshot.winner is not None:
             name = COLOR_NAMES.get(snapshot.winner, snapshot.winner.upper())
             lines.append(f"{name} WINS")
 
-        font = cv2.FONT_HERSHEY_SIMPLEX
         styles = [(2.0, 5) if i == 0 else (1.1, 3) for i in range(len(lines))]
-        sizes = [cv2.getTextSize(text, font, scale, thickness)[0]
+        sizes = [canvas.text_size(text, scale, thickness)
                  for text, (scale, thickness) in zip(lines, styles)]
 
         total_height = sum(size[1] for size in sizes) + GAME_OVER_LINE_GAP * (len(lines) - 1)
@@ -206,17 +189,12 @@ class GraphicsRenderer:
             y += GAME_OVER_LINE_GAP
 
     def _draw_rejection_banner(self, canvas, message):
-        img = canvas.img
-        h, w = img.shape[:2]
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        (text_w, text_h), _ = cv2.getTextSize(message, font, REJECTION_FONT_SCALE, REJECTION_THICKNESS)
+        h, w = canvas.img.shape[:2]
+        text_w, text_h = canvas.text_size(message, REJECTION_FONT_SCALE, REJECTION_THICKNESS)
 
         bar_h = text_h + 2 * REJECTION_PADDING
         top = h - bar_h
-        region = img[top:h, :, :3]
-        color = np.array(REJECTION_BAR_COLOR, dtype=np.float32)
-        blended = region.astype(np.float32) * (1 - REJECTION_BAR_ALPHA) + color * REJECTION_BAR_ALPHA
-        region[:] = blended.astype(region.dtype)
+        canvas.blend_rect(top, 0, h, w, REJECTION_BAR_COLOR, REJECTION_BAR_ALPHA)
 
         x = (w - text_w) // 2
         y = h - REJECTION_PADDING - 2
@@ -232,10 +210,9 @@ class GraphicsRenderer:
         colors = self._config.COLORS
         left_colors, right_colors = (colors[:1], colors[1:]) if colors else ((), ())
 
-        canvas = Img()
         total_w = SIDE_PANEL_WIDTH + board_w + SIDE_PANEL_WIDTH
-        canvas.img = np.full((board_h, total_w, 4), SIDE_PANEL_BG_COLOR, dtype=board_canvas.img.dtype)
-        canvas.img[:, SIDE_PANEL_WIDTH:SIDE_PANEL_WIDTH + board_w] = board_canvas.img
+        canvas = Img.create(total_w, board_h, color=SIDE_PANEL_BG_COLOR)
+        board_canvas.draw_on(canvas, SIDE_PANEL_WIDTH, 0)
 
         self._draw_color_panel(canvas, snapshot, left_colors, 0, SIDE_PANEL_WIDTH, board_h)
         self._draw_color_panel(canvas, snapshot, right_colors, SIDE_PANEL_WIDTH + board_w, SIDE_PANEL_WIDTH, board_h)

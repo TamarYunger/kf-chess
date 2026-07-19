@@ -5,6 +5,8 @@ formatting is unit-testable without a canvas, and reusable by any future
 renderer (e.g. a text move log) without duplicating it.
 """
 
+from board.piece import kind_of
+
 KIND_NAMES = {"P": "Pawn", "N": "Knight", "B": "Bishop", "R": "Rook", "Q": "Queen", "K": "King"}
 
 
@@ -26,7 +28,7 @@ def move_notation(record, board_height):
     KeyError. If the move promoted (`record.promoted_to` is set), an
     "= Queen"-style suffix is appended, mirroring standard chess notation.
     """
-    name = KIND_NAMES.get(record.piece[1], record.piece[1])
+    name = KIND_NAMES.get(kind_of(record.piece), kind_of(record.piece))
     start = square_name(record.start, board_height)
     end = square_name(record.end, board_height)
     text = f"{name} {start}-{end}"

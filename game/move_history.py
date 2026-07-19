@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 
+from board.piece import color_of, kind_of
 from game.models import MoveRecord
 
 
@@ -31,7 +32,7 @@ class MoveHistory:
     # -- event handlers -----------------------------------------------
 
     def _on_move_accepted(self, piece, start, end):
-        self._records[piece[0]].append(MoveRecord(piece, start, end))
+        self._records[color_of(piece)].append(MoveRecord(piece, start, end))
 
     def _on_arrival(self, event):
         """Finds the record this arrival settled - matching color +
@@ -39,9 +40,9 @@ class MoveHistory:
         settled, since two same-color moves can never target the same
         destination - see the DESTINATION_CONTESTED guard in
         GameEngine.request_move)."""
-        history = self._records[event.piece[0]]
+        history = self._records[color_of(event.piece)]
         for i in range(len(history) - 1, -1, -1):
             record = history[i]
-            if record.end == event.destination and record.piece[1] != event.piece[1]:
-                history[i] = dataclasses.replace(record, promoted_to=event.piece[1])
+            if record.end == event.destination and kind_of(record.piece) != kind_of(event.piece):
+                history[i] = dataclasses.replace(record, promoted_to=kind_of(event.piece))
                 break

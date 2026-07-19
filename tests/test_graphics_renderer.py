@@ -2,8 +2,8 @@ from board.board import Board
 from config import settings
 from game.models import MoveRecord
 from rules.reasons import Reason
+from game.snapshot import GameSnapshot
 from view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
-from view.snapshot import GameSnapshot
 
 ASSETS_DIR = "assets"
 

@@ -7,7 +7,7 @@ from view.animation import (
     interpolate_position,
     compute_piece_views,
 )
-from view.snapshot import GameSnapshot
+from game.snapshot import GameSnapshot
 from realtime.models import Move, Jump, Arrival
 from board.board import Board
 from config import settings

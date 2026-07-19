@@ -1,8 +1,8 @@
 import dataclasses
 
 from game.models import MoveResult, MoveRecord
+from game.snapshot import GameSnapshot
 from rules.reasons import Reason
-from view.snapshot import GameSnapshot
 
 
 class GameEngine:

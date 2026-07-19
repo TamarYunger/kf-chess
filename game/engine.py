@@ -1,3 +1,4 @@
+from board.piece import color_of, kind_of
 from game.events import EventBus
 from game.models import MoveResult
 from game.move_history import MoveHistory
@@ -20,7 +21,7 @@ class GameEngine:
     with fakes/stubs instead of monkeypatching.
     """
 
-    def __init__(self, board, rule_engine, arbiter, win_condition, config):
+    def __init__(self, board, rule_engine, arbiter, win_condition, config, events=None):
         self._board = board
         self._rule_engine = rule_engine
         self._arbiter = arbiter
@@ -28,10 +29,19 @@ class GameEngine:
         self._config = config
         self._game_over = False
         self._winner = None
-        self._events = EventBus()
+        self._events = events if events is not None else EventBus()
         self._move_history = MoveHistory(config.COLORS)
         self._move_history.subscribe_to(self._events)
         self._score = {color: 0 for color in config.COLORS}
+
+    @property
+    def events(self):
+        """The engine's EventBus, so outside code (e.g. a server broadcasting
+        to clients) can subscribe to the same events this engine publishes -
+        "move_accepted", "arrival", "score_changed", "game_over" - without
+        polling `snapshot()`. Pass one in via the constructor to share a bus
+        across several collaborators instead of using this one."""
+        return self._events
 
     @property
     def game_over(self):
@@ -92,7 +102,7 @@ class GameEngine:
             return frozenset()
 
         piece = self._board.get(*start)
-        contested = {move.end for move in self._arbiter.active_moves if move.piece[0] == piece[0]}
+        contested = {move.end for move in self._arbiter.active_moves if color_of(move.piece) == color_of(piece)}
         return frozenset(
             (row, col)
             for row in range(self._board.height)
@@ -125,7 +135,7 @@ class GameEngine:
         # start and silently fail to land later. An enemy piece is still
         # allowed to target the same cell (that's a legitimate race, not a
         # mistake) - only a same-color contest is rejected here.
-        if any(move.end == end and move.piece[0] == piece[0] for move in self._arbiter.active_moves):
+        if any(move.end == end and color_of(move.piece) == color_of(piece) for move in self._arbiter.active_moves):
             return MoveResult(False, Reason.DESTINATION_CONTESTED)
 
         self._arbiter.start_move(piece, start, end)
@@ -178,10 +188,12 @@ class GameEngine:
         for event in events:
             self._events.publish("arrival", event)
             if event.captured is not None:
-                capturer_color = event.piece[0]
-                self._score[capturer_color] += self._config.PIECE_VALUES[event.captured[1]]
+                capturer_color = color_of(event.piece)
+                self._score[capturer_color] += self._config.PIECE_VALUES[kind_of(event.captured)]
+                self._events.publish("score_changed", capturer_color, self._score[capturer_color])
             if self._win_condition.is_game_over(event.captured):
                 self._game_over = True
-                captured_color = event.captured[0]
+                captured_color = color_of(event.captured)
                 self._winner = next(c for c in self._config.COLORS if c != captured_color)
+                self._events.publish("game_over", self._winner)
                 break

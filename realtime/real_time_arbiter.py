@@ -206,6 +206,14 @@ class RealTimeArbiter:
         return path if cutoff is None else path[:cutoff]
 
     def _settle_move(self, move):
+        if self._board.get(*move.start) != move.piece:
+            # Something else already captured this piece at its own source
+            # cell (e.g. a shorter enemy move landed there first, before
+            # this move's own arrival). The piece is gone - it must not
+            # reappear at its destination, nor clear a cell it no longer
+            # occupies.
+            return None
+
         if self._is_intercepted(move):
             # The moving piece is captured mid-flight by the jumping piece,
             # so it is removed from its source rather than surviving there.

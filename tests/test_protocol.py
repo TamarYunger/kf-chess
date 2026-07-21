@@ -8,9 +8,9 @@ from rules.rule_engine import RuleEngine
 from rules.rule_registry import build_default_registry
 from game.engine import GameEngine
 from server.protocol import (
-    Command, ProtocolError, encode_error, encode_login, encode_login_rejected, encode_matched,
+    Command, ProtocolError, encode_error, encode_login, encode_login_rejected,
     encode_no_match, encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected,
-    encode_snapshot, parse_command, resolve_cells,
+    encode_room, encode_snapshot, parse_command, resolve_cells,
 )
 from view.snapshot_codec import snapshot_from_json
 
@@ -145,8 +145,36 @@ def test_parse_command_play_rejects_any_argument():
         parse_command("PLAY now")
 
 
-def test_encode_matched_shape():
-    assert encode_matched("b") == {"type": "matched", "payload": {"color": "b"}}
+def test_parse_command_room_create():
+    assert parse_command("ROOM CREATE") == Command("ROOM_CREATE", ())
+
+
+def test_parse_command_room_join():
+    assert parse_command("ROOM JOIN a1b2c3") == Command("ROOM_JOIN", ("a1b2c3",))
+
+
+def test_parse_command_room_rejects_an_unknown_subcommand():
+    with pytest.raises(ProtocolError):
+        parse_command("ROOM DESTROY")
+
+
+def test_parse_command_room_create_rejects_an_argument():
+    with pytest.raises(ProtocolError):
+        parse_command("ROOM CREATE extra")
+
+
+def test_parse_command_room_join_rejects_a_missing_room_id():
+    with pytest.raises(ProtocolError):
+        parse_command("ROOM JOIN")
+
+
+def test_parse_command_room_alone_is_an_error():
+    with pytest.raises(ProtocolError):
+        parse_command("ROOM")
+
+
+def test_encode_room_shape():
+    assert encode_room("a1b2c3", "w") == {"type": "room", "payload": {"room_id": "a1b2c3", "role": "w"}}
 
 
 def test_encode_no_match_shape():

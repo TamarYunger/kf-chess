@@ -14,6 +14,7 @@ is synchronous, driven by cv2.waitKey, and must never block on network
 I/O); see view/network_client.py. Either way, every screen transition is
 driven by bus events (view/screen_manager.py), not hardcoded here.
 """
+import logging
 import types
 from pathlib import Path
 
@@ -28,10 +29,12 @@ from view.piece_assets import load_all_piece_configs, state_duration_ms
 from view.screen_manager import ScreenManager
 from view.screens.home_screen import HomeScreen
 from view.screens.login_screen import LoginScreen
+from view.session_logging import attach_session_logging
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 WINDOW_NAME = "KungFu Chess"
 DEFAULT_SERVER_URL = "ws://localhost:8765"
+CLIENT_LOG_PATH = PROJECT_ROOT / "logs" / "client.log"
 
 STANDARD_BOARD_TEXT = [
     "bR bN bB bQ bK bB bN bR",
@@ -80,27 +83,40 @@ def build_session(mode, events, config, board_lines=None, server_url=DEFAULT_SER
 def build_screens(events, config, session, mode):
     """Wires every known screen into a ScreenManager. "local" mode (no
     server, "Play Offline") starts straight on GAME - there's no one to
-    log in to, let alone matchmake with. "network" mode starts on LOGIN:
-    a successful LOGIN moves on to HOME ("login" event) - it only
-    authenticates, it doesn't seat a color - and HOME's "Play" button
-    (server.matchmaking) only reaches GAME once the server actually finds
-    an opponent ("matched" event). Every one of these transitions is
-    ScreenManager's own `transitions=` wiring, not an if/else here or in
-    run_gui's loop. ROOM_DIALOG lands in a later step, registered the same
-    way.
+    log in to, let alone matchmake or room with. "network" mode starts on
+    LOGIN: a successful LOGIN moves on to HOME ("login" event) - it only
+    authenticates, it doesn't put anyone in a room - and HOME's "Play"
+    button (server.matchmaking) or its "Room" dialog's Create/Join
+    (view/screens/room_dialog.py) both only reach GAME once the server
+    actually seats this connection somewhere - PLAY's match and ROOM
+    CREATE/JOIN end up publishing the exact same "room" event (server.room.
+    Room), so one transition covers both. Every one of these transitions
+    is ScreenManager's own `transitions=` wiring, not an if/else here or
+    in run_gui's loop.
     """
     initial = "GAME" if mode == "local" else "LOGIN"
     manager = ScreenManager(events, initial=initial)
     manager.register("GAME", GameScreen(config, session, events, board_x_offset=SIDE_PANEL_WIDTH))
     if mode == "network":
         manager.register("LOGIN", LoginScreen(session, events), transitions={"login": "HOME"})
-        manager.register("HOME", HomeScreen(session, events), transitions={"matched": "GAME"})
+        manager.register("HOME", HomeScreen(session, events), transitions={"room": "GAME"})
     return manager
 
 
+def configure_client_logging(level=logging.INFO):
+    CLIENT_LOG_PATH.parent.mkdir(exist_ok=True)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[logging.FileHandler(CLIENT_LOG_PATH, encoding="utf-8")],
+    )
+
+
 def run_gui(mode="local", server_url=DEFAULT_SERVER_URL, board_lines=None, config=settings):
+    configure_client_logging()
     config = with_synced_rest_durations(config)
     events = EventBus()
+    attach_session_logging(events)
     session = build_session(mode, events, config, board_lines=board_lines, server_url=server_url)
     manager = build_screens(events, config, session, mode)
 

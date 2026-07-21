@@ -24,6 +24,8 @@ ENV/
 
 # Local server data
 server/*.db
+server/logs/
+*.log
 
 # Type checkers / linters
 .mypy_cache/

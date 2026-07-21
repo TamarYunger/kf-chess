@@ -117,14 +117,16 @@ def test_build_screens_network_mode_moves_to_home_once_the_bus_reports_a_login()
         session.close()
 
 
-def test_build_screens_network_mode_moves_to_game_once_the_bus_reports_a_match():
+def test_build_screens_network_mode_moves_to_game_once_the_bus_reports_a_room():
+    # PLAY's match and ROOM CREATE/JOIN both end up publishing the same
+    # "room" event - one transition covers both.
     events = EventBus()
     session = build_session("network", events, settings, server_url="ws://127.0.0.1:1")
 
     try:
         manager = build_screens(events, settings, session, "network")
         events.publish("login", {"username": "alice", "rating": 1200})
-        events.publish("matched", {"color": "w"})
+        events.publish("room", {"room_id": "abc123", "role": "w"})
 
         assert manager.current_name == "GAME"
     finally:

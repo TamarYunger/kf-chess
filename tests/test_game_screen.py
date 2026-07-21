@@ -173,3 +173,71 @@ def test_game_over_snapshot_suppresses_the_disconnect_overlay():
     canvas = Img.create(1, 1)
 
     screen.render(canvas)  # must not raise, and the countdown must not be drawn
+
+
+def test_room_event_is_stored_and_rendered_without_raising():
+    events = EventBus()
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
+
+    events.publish("room", {"room_id": "abc123", "role": "w"})
+    canvas = Img.create(1, 1)
+    screen.render(canvas)  # must not raise, with the header drawn
+
+    assert screen._room_id == "abc123"
+    assert screen._role == "w"
+
+
+def test_seated_role_can_click_and_double_click():
+    events = EventBus()
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
+    events.publish("room", {"room_id": "abc123", "role": "w"})
+    canvas = Img.create(1, 1)
+    screen.render(canvas)
+
+    screen.handle_click(SIDE_PANEL_WIDTH, 0)
+    screen.handle_double_click(SIDE_PANEL_WIDTH, 0)
+
+    assert session.commands == [{"type": "click", "cell": (0, 0)}, {"type": "jump", "cell": (0, 0)}]
+
+
+def test_viewer_role_click_submits_nothing():
+    events = EventBus()
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
+    events.publish("room", {"room_id": "abc123", "role": "viewer"})
+    canvas = Img.create(1, 1)
+    screen.render(canvas)
+
+    screen.handle_click(SIDE_PANEL_WIDTH, 0)
+
+    assert session.commands == []
+
+
+def test_viewer_role_double_click_submits_nothing():
+    events = EventBus()
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
+    events.publish("room", {"room_id": "abc123", "role": "viewer"})
+    canvas = Img.create(1, 1)
+    screen.render(canvas)
+
+    screen.handle_double_click(SIDE_PANEL_WIDTH, 0)
+
+    assert session.commands == []
+
+
+def test_no_room_yet_still_allows_clicks_local_play_style():
+    # Before any "room" event has arrived (e.g. LocalGameSession, which
+    # never publishes one), self._role stays None - clicks must still work,
+    # exactly like offline play always has.
+    events = EventBus()
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
+    canvas = Img.create(1, 1)
+    screen.render(canvas)
+
+    screen.handle_click(SIDE_PANEL_WIDTH, 0)
+
+    assert session.commands == [{"type": "click", "cell": (0, 0)}]

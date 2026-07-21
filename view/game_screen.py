@@ -23,6 +23,10 @@ DISCONNECT_FONT_SCALE_1 = 0.9
 DISCONNECT_FONT_SCALE_2 = 0.7
 DISCONNECT_THICKNESS = 2
 
+WAITING_LINE_1 = "Waiting for opponent..."
+WAITING_FONT_SCALE_1 = 0.9
+WAITING_THICKNESS = 2
+
 ROOM_HEADER_COLOR = (0, 215, 255, 255)  # BGRA amber, matches HomeScreen/LoginScreen's title color
 ROOM_HEADER_FONT_SCALE = 0.5
 ROOM_HEADER_X = 8
@@ -37,11 +41,14 @@ class GameScreen(Screen):
 
     GraphicsRenderer's own contract - snapshot in, canvas out - is
     untouched; this screen just copies its output into the canvas
-    ScreenManager handed this screen (see Screen.render), then layers a
-    disconnect-countdown overlay on top when relevant (see
-    "opponent_disconnected"/"opponent_reconnected" below) - styled after
-    GraphicsRenderer's own game-over banner, the same pattern
-    view/screens/home_screen.py's "Searching..." overlay reuses.
+    ScreenManager handed this screen (see Screen.render), then layers
+    either a "waiting for a second player" overlay (a fresh ROOM CREATE's
+    creator, alone until "room_started" arrives - see
+    "waiting_for_opponent" below) or a disconnect-countdown overlay on top
+    when relevant (see "opponent_disconnected"/"opponent_reconnected"
+    below) - both styled after GraphicsRenderer's own game-over banner,
+    the same pattern view/screens/home_screen.py's "Searching..." overlay
+    reuses.
 
     `events` is the same bus NetworkGameSession publishes server messages
     on (harmless to subscribe to for a LocalGameSession, which never
@@ -59,16 +66,19 @@ class GameScreen(Screen):
         self._disconnect_deadline = None  # wall-clock time.time(), or None if no countdown is active
         self._room_id = None
         self._role = None  # a color (seated) or "viewer"; None outside a room (e.g. local play)
+        self._waiting_for_opponent = False  # a fresh ROOM CREATE's creator, alone until someone joins
         events.subscribe("opponent_disconnected", self._on_opponent_disconnected)
         events.subscribe("opponent_reconnected", self._on_opponent_reconnected)
         events.subscribe("room", self._on_room)
+        events.subscribe("waiting_for_opponent", self._on_waiting_for_opponent)
+        events.subscribe("room_started", self._on_room_started)
 
     def render(self, canvas):
-        # The one call per frame that lets the session do its own
-        # per-frame work (advance a local clock / drain a network queue) -
-        # see GameSession.latest_snapshot. Cached for handle_click/
-        # handle_double_click, which run from the mouse callback, not this
-        # per-frame render call, and must not themselves trigger that work.
+        # A pure read - main_gui.py's loop is what calls session.tick()
+        # once per frame, regardless of which screen is current (see
+        # GameSession.tick's own docstring for why this screen must not
+        # do that itself). Cached for handle_click/handle_double_click,
+        # which run from the mouse callback, not this per-frame call.
         self._last_snapshot = self._session.latest_snapshot()
         if self._last_snapshot is None:
             self._render_connecting(canvas)
@@ -77,18 +87,20 @@ class GameScreen(Screen):
         canvas.img = rendered.img
         if self._room_id is not None:
             self._draw_room_header(canvas)
-        if self._disconnect_deadline is not None and not self._last_snapshot.game_over:
+        if self._waiting_for_opponent:
+            self._draw_waiting_overlay(canvas)
+        elif self._disconnect_deadline is not None and not self._last_snapshot.game_over:
             self._draw_disconnect_overlay(canvas)
 
     def handle_click(self, x, y):
-        if self._role == "viewer":
-            return  # a viewer never submits move commands - see server/room.py's own rejection too
+        if self._role == "viewer" or self._waiting_for_opponent:
+            return  # nothing to move yet - see server/room.py's own rejection too
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
             self._session.submit_command({"type": "click", "cell": cell})
 
     def handle_double_click(self, x, y):
-        if self._role == "viewer":
+        if self._role == "viewer" or self._waiting_for_opponent:
             return
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
@@ -125,6 +137,23 @@ class GameScreen(Screen):
         if self._role == "viewer":
             text += " (viewing)"
         canvas.put_text(text, ROOM_HEADER_X, ROOM_HEADER_Y, ROOM_HEADER_FONT_SCALE, ROOM_HEADER_COLOR, 1)
+
+    # -- waiting for a second player to join a fresh room ----------------
+
+    def _on_waiting_for_opponent(self, payload):
+        self._waiting_for_opponent = True
+
+    def _on_room_started(self, payload):
+        self._waiting_for_opponent = False
+
+    def _draw_waiting_overlay(self, canvas):
+        h, w = canvas.img.shape[:2]
+        canvas.blend_rect(0, 0, h, w, (0, 0, 0), GAME_OVER_DIM_ALPHA)
+        text_w, text_h = canvas.text_size(WAITING_LINE_1, WAITING_FONT_SCALE_1, WAITING_THICKNESS)
+        canvas.put_text(
+            WAITING_LINE_1, (w - text_w) // 2, (h + text_h) // 2,
+            WAITING_FONT_SCALE_1, GAME_OVER_TEXT_COLOR, WAITING_THICKNESS,
+        )
 
     # -- opponent disconnect countdown ----------------------------------
 

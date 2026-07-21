@@ -126,6 +126,13 @@ def run_gui(mode="local", server_url=DEFAULT_SERVER_URL, board_lines=None, confi
     canvas = Img.create(1, 1)
     try:
         while True:
+            # Exactly once per frame, regardless of which screen is
+            # current - see GameSession.tick's own docstring for why this
+            # can't live inside a Screen's render() instead (that's the
+            # bug it replaced: a bus event published while LOGIN or HOME
+            # was current never reached anyone, because nothing was
+            # draining the session's queue).
+            session.tick()
             manager.render(canvas)
             canvas.show_frame(WINDOW_NAME)
 

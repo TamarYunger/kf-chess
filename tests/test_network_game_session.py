@@ -74,6 +74,7 @@ def test_snapshot_message_is_decoded_and_returned():
         "width": 3, "height": 3, "game_over": False,
     }})
 
+    session.tick()
     snapshot = session.latest_snapshot()
 
     assert snapshot.width == 3
@@ -85,9 +86,10 @@ def test_latest_snapshot_keeps_the_last_decoded_snapshot_once_the_queue_is_drain
     client.push({"type": "snapshot", "payload": {
         "cells": [["wK"]], "width": 1, "height": 1, "game_over": False,
     }})
+    session.tick()
     session.latest_snapshot()
 
-    second = session.latest_snapshot()  # nothing new queued
+    second = session.latest_snapshot()  # nothing new queued, no further tick() needed
 
     assert second is not None
     assert second.cells == (("wK",),)
@@ -101,7 +103,7 @@ def test_every_message_is_republished_on_the_bus_by_type():
     client.push({"type": "connected", "payload": None})
     client.push({"type": "connection_error", "payload": {"error": "boom"}})
 
-    session.latest_snapshot()
+    session.tick()
 
     assert received == [
         ("connected", None),
@@ -140,7 +142,7 @@ def test_click_before_any_snapshot_sends_nothing():
 def test_first_click_does_not_send_anything_yet():
     session, client, events = make_session()
     client.push(snapshot_message())
-    session.latest_snapshot()
+    session.tick()
 
     session.submit_command({"type": "click", "cell": (0, 0)})
 
@@ -150,7 +152,7 @@ def test_first_click_does_not_send_anything_yet():
 def test_second_click_sends_a_move_with_both_squares():
     session, client, events = make_session()
     client.push(snapshot_message())  # 3x3 board: (0,0) -> "a3", (0,2) -> "c3"
-    session.latest_snapshot()
+    session.tick()
 
     session.submit_command({"type": "click", "cell": (0, 0)})
     session.submit_command({"type": "click", "cell": (0, 2)})
@@ -161,10 +163,11 @@ def test_second_click_sends_a_move_with_both_squares():
 def test_clicking_the_same_cell_twice_deselects_without_sending():
     session, client, events = make_session()
     client.push(snapshot_message())
-    session.latest_snapshot()
+    session.tick()
 
     session.submit_command({"type": "click", "cell": (0, 0)})
     session.submit_command({"type": "click", "cell": (0, 0)})
+    session.tick()
 
     assert client.sent == []
     assert session.latest_snapshot().selected is None
@@ -173,11 +176,12 @@ def test_clicking_the_same_cell_twice_deselects_without_sending():
 def test_a_third_click_starts_a_new_selection():
     session, client, events = make_session()
     client.push(snapshot_message())
-    session.latest_snapshot()
+    session.tick()
     session.submit_command({"type": "click", "cell": (0, 0)})
     session.submit_command({"type": "click", "cell": (0, 0)})  # deselect
 
     session.submit_command({"type": "click", "cell": (1, 1)})
+    session.tick()
 
     assert session.latest_snapshot().selected == (1, 1)
 
@@ -185,7 +189,7 @@ def test_a_third_click_starts_a_new_selection():
 def test_jump_command_sends_jump_immediately():
     session, client, events = make_session()
     client.push(snapshot_message())
-    session.latest_snapshot()
+    session.tick()
 
     session.submit_command({"type": "jump", "cell": (0, 0)})
 
@@ -195,10 +199,11 @@ def test_jump_command_sends_jump_immediately():
 def test_jump_clears_a_pending_selection():
     session, client, events = make_session()
     client.push(snapshot_message())
-    session.latest_snapshot()
+    session.tick()
     session.submit_command({"type": "click", "cell": (0, 0)})
 
     session.submit_command({"type": "jump", "cell": (1, 1)})
+    session.tick()
 
     assert session.latest_snapshot().selected is None
 
@@ -206,9 +211,10 @@ def test_jump_clears_a_pending_selection():
 def test_pending_selection_is_reflected_in_the_snapshot():
     session, client, events = make_session()
     client.push(snapshot_message())
-    session.latest_snapshot()
+    session.tick()
 
     session.submit_command({"type": "click", "cell": (0, 0)})
+    session.tick()
 
     assert session.latest_snapshot().selected == (0, 0)
 
@@ -216,9 +222,10 @@ def test_pending_selection_is_reflected_in_the_snapshot():
 def test_rejected_message_sets_the_rejection_reason_on_the_snapshot():
     session, client, events = make_session()
     client.push(snapshot_message())
-    session.latest_snapshot()
+    session.tick()
     client.push({"type": "rejected", "payload": {"reason": "illegal_piece_move"}})
 
+    session.tick()
     snapshot = session.latest_snapshot()
 
     assert snapshot.rejection_reason == "illegal_piece_move"
@@ -227,11 +234,13 @@ def test_rejected_message_sets_the_rejection_reason_on_the_snapshot():
 def test_a_fresh_first_click_clears_a_stale_rejection_reason():
     session, client, events = make_session()
     client.push(snapshot_message())
-    session.latest_snapshot()
+    session.tick()
     client.push({"type": "rejected", "payload": {"reason": "illegal_piece_move"}})
+    session.tick()
     session.latest_snapshot()
 
     session.submit_command({"type": "click", "cell": (0, 0)})
+    session.tick()
 
     assert session.latest_snapshot().rejection_reason is None
 
@@ -262,9 +271,11 @@ def test_end_to_end_against_a_real_websocket_server():
                 await asyncio.wait_for(connected.wait(), timeout=5.0)
 
                 deadline = time.time() + 5.0
+                session.tick()
                 snapshot = session.latest_snapshot()
                 while snapshot is None and time.time() < deadline:
                     await asyncio.sleep(0.02)
+                    session.tick()
                     snapshot = session.latest_snapshot()
                 assert snapshot is not None and snapshot.width == 3
 

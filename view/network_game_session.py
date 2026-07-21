@@ -38,6 +38,7 @@ class NetworkGameSession(GameSession):
         self._snapshot = None
         self._pending_start = None  # a cell selected by a first click, awaiting a second
         self._rejection_reason = None
+        self._latest_snapshot = None
         self._client.start()
 
     def submit_command(self, command):
@@ -70,7 +71,7 @@ class NetworkGameSession(GameSession):
     def _square(self, cell):
         return square_name(cell, self._snapshot.height)
 
-    def latest_snapshot(self):
+    def tick(self):
         for message in self._client.drain():
             self._events.publish(message["type"], message.get("payload"))
             if message["type"] == "snapshot":
@@ -79,10 +80,14 @@ class NetworkGameSession(GameSession):
                 self._rejection_reason = message["payload"]["reason"]
 
         if self._snapshot is None:
-            return None
-        return dataclasses.replace(
-            self._snapshot, selected=self._pending_start, rejection_reason=self._rejection_reason,
-        )
+            self._latest_snapshot = None
+        else:
+            self._latest_snapshot = dataclasses.replace(
+                self._snapshot, selected=self._pending_start, rejection_reason=self._rejection_reason,
+            )
+
+    def latest_snapshot(self):
+        return self._latest_snapshot
 
     def close(self):
         self._client.stop()

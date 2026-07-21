@@ -10,7 +10,7 @@ from game.engine import GameEngine
 from server.protocol import (
     Command, ProtocolError, encode_error, encode_login, encode_login_rejected,
     encode_no_match, encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected,
-    encode_room, encode_snapshot, parse_command, resolve_cells,
+    encode_room, encode_room_started, encode_snapshot, encode_waiting_for_opponent, parse_command, resolve_cells,
 )
 from view.snapshot_codec import snapshot_from_json
 
@@ -189,3 +189,11 @@ def test_encode_opponent_disconnected_shape():
 
 def test_encode_opponent_reconnected_shape():
     assert encode_opponent_reconnected("w") == {"type": "opponent_reconnected", "payload": {"color": "w"}}
+
+
+def test_encode_waiting_for_opponent_shape():
+    assert encode_waiting_for_opponent() == {"type": "waiting_for_opponent", "payload": None}
+
+
+def test_encode_room_started_shape():
+    assert encode_room_started() == {"type": "room_started", "payload": None}

@@ -84,6 +84,7 @@ def test_build_screens_click_reaches_the_underlying_local_session():
     manager.render(canvas)  # lets GameScreen cache a snapshot to bounds-check against
 
     manager.handle_click(SIDE_PANEL_WIDTH, 0)
+    session.tick()
 
     assert session.latest_snapshot().selected == (0, 0)
 

@@ -259,10 +259,13 @@ class GameServer:
             await self._safe_send(connection, json.dumps(encode_error(f"Room {room_id!r} not found")))
             return
 
+        was_started = room.started
         role = room.seat_or_view(connection, player["username"], player["rating"])
         self._connection_room[connection] = room.room_id
         logger.info("%s joined room %s as %s", player["username"], room.room_id, role)
         await room.welcome(connection, role)
+        if room.started and not was_started:
+            await room.notify_room_started(exclude=connection)
 
     def _new_room(self):
         room_id = self._generate_room_id()

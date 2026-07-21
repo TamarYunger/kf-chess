@@ -61,7 +61,14 @@ def test_sidebar_header_draws_score_next_to_the_color_name():
     # White's header lives in the left panel now.
     no_score_header = no_score_canvas.img[:40, :SIDE_PANEL_WIDTH, :3]
     score_header = score_canvas.img[:40, :SIDE_PANEL_WIDTH, :3]
-    assert (score_header >= 200).any(axis=-1).sum() > (no_score_header >= 200).any(axis=-1).sum()
+    # Comparing exact bright-pixel *counts* between two different digit
+    # glyphs ("0" vs "9") is font-rendering-dependent, not a portable
+    # assertion: opencv-python 5.0.0's HERSHEY_SIMPLEX rasterization here
+    # gives "0" more >=200-brightness pixels than "9" (323 vs 308) - the
+    # opposite of what this test assumed, though it held under 4.13. What
+    # actually matters - the score value changed what's drawn - is a
+    # plain pixel-level difference, not a brightness-magnitude comparison.
+    assert not (score_header == no_score_header).all()
 
 
 def test_move_history_panel_has_one_column_per_extra_color():

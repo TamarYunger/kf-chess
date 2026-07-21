@@ -15,9 +15,11 @@ from rules.rule_engine import RuleEngine
 from rules.game_conditions import KingCaptureWinCondition, LastRankPromotion
 from realtime.real_time_arbiter import RealTimeArbiter
 from board.loaders import load_text_board
+from bus.event_bus import EventBus
 from game.board_mapper import BoardMapper
 from game.engine import GameEngine
 from game.controller import Controller
+from game.presentation_stub import attach_presentation_stub
 from view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
 from view.img import Img
 from view.piece_assets import load_all_piece_configs, state_duration_ms
@@ -54,12 +56,15 @@ def build_game(board_lines, config=settings, board_x_offset=0):
         promotion_rule=LastRankPromotion(config.PAWN_DIRECTION),
         config=config,
     )
+    events = EventBus()
+    attach_presentation_stub(events)
     engine = GameEngine(
         board=board,
         rule_engine=RuleEngine(rule_registry=registry, config=config),
         arbiter=arbiter,
         win_condition=KingCaptureWinCondition(),
         config=config,
+        events=events,
     )
     controller = Controller(
         engine=engine,

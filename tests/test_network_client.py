@@ -95,6 +95,38 @@ def test_send_reaches_the_server():
     _run(scenario())
 
 
+def test_send_with_a_string_reaches_the_server_raw_not_json_encoded():
+    # server/protocol.py's wire format is plain text ("MOVE e2 e4"), not
+    # JSON - a str given to send() must arrive exactly as typed, not
+    # wrapped in quotes by an extra json.dumps().
+    async def scenario():
+        received = []
+        connected = asyncio.Event()
+
+        async def handler(connection):
+            connected.set()
+            async for raw in connection:
+                received.append(raw)
+
+        async with websockets.serve(handler, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            client = make_client(f"ws://127.0.0.1:{port}")
+            client.start()
+            try:
+                await asyncio.to_thread(_drain_one, client.incoming)  # "connected"
+                await asyncio.wait_for(connected.wait(), timeout=POLL_TIMEOUT)
+                client.send("MOVE e2 e4")
+
+                deadline = time.time() + POLL_TIMEOUT
+                while not received and time.time() < deadline:
+                    await asyncio.sleep(0.02)
+                assert received == ["MOVE e2 e4"]
+            finally:
+                client.stop()
+
+    _run(scenario())
+
+
 def test_drain_returns_everything_queued_without_blocking():
     client = NetworkClient("ws://unused")
     client.incoming.put({"type": "a"})

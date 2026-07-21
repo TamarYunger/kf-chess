@@ -7,6 +7,7 @@ from view.game_screen import GameScreen
 from view.graphics_renderer import SIDE_PANEL_WIDTH
 from view.local_game_session import LocalGameSession
 from view.network_game_session import NetworkGameSession
+from view.screens.login_screen import LoginScreen
 
 
 def test_with_synced_rest_durations_carries_every_config_field():
@@ -58,10 +59,12 @@ def test_build_session_rejects_an_unknown_mode():
         build_session("bogus", events, settings)
 
 
-def test_build_screens_registers_game_as_the_initial_screen():
+def test_build_screens_local_mode_starts_directly_on_game():
+    # "Play Offline" (mode="local"): there's no server to log in to, so
+    # the game board is the very first thing shown - no LOGIN screen.
     events = EventBus()
     session = build_session("local", events, settings, board_lines=["wK . .", ". . .", ". . ."])
-    manager = build_screens(events, settings, session)
+    manager = build_screens(events, settings, session, "local")
 
     assert manager.current_name == "GAME"
     assert isinstance(manager.current, GameScreen)
@@ -74,7 +77,7 @@ def test_build_screens_click_reaches_the_underlying_local_session():
     # through build_game()/Controller/BoardMapper directly.
     events = EventBus()
     session = build_session("local", events, settings, board_lines=["wK . .", ". . .", ". . ."])
-    manager = build_screens(events, settings, session)
+    manager = build_screens(events, settings, session, "local")
 
     from view.img import Img
     canvas = Img.create(1, 1)
@@ -83,3 +86,30 @@ def test_build_screens_click_reaches_the_underlying_local_session():
     manager.handle_click(SIDE_PANEL_WIDTH, 0)
 
     assert session.latest_snapshot().selected == (0, 0)
+
+
+def test_build_screens_network_mode_starts_on_login():
+    events = EventBus()
+    session = build_session("network", events, settings, server_url="ws://127.0.0.1:1")
+
+    try:
+        manager = build_screens(events, settings, session, "network")
+        assert manager.current_name == "LOGIN"
+        assert isinstance(manager.current, LoginScreen)
+    finally:
+        session.close()
+
+
+def test_build_screens_network_mode_moves_to_game_once_the_bus_reports_a_login():
+    # ScreenManager's own transitions= wiring is what does this - nothing
+    # in main_gui.py's render loop branches on "did login succeed".
+    events = EventBus()
+    session = build_session("network", events, settings, server_url="ws://127.0.0.1:1")
+
+    try:
+        manager = build_screens(events, settings, session, "network")
+        events.publish("login", {"color": "w", "username": "alice"})
+
+        assert manager.current_name == "GAME"
+    finally:
+        session.close()

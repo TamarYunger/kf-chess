@@ -25,7 +25,10 @@ from realtime.real_time_arbiter import RealTimeArbiter
 from rules.game_conditions import KingCaptureWinCondition, LastRankPromotion
 from rules.rule_engine import RuleEngine
 from rules.rule_registry import build_default_registry
-from server.protocol import ProtocolError, encode_error, encode_rejected, encode_snapshot, parse_command, resolve_cells
+from server.protocol import (
+    ProtocolError, encode_error, encode_login, encode_login_rejected, encode_rejected, encode_snapshot,
+    parse_command, resolve_cells,
+)
 
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 8765
@@ -61,15 +64,26 @@ def build_engine(board_lines, config=settings):
 
 
 class GameServer:
-    """Owns one GameEngine and every currently-connected client. Not itself
-    aware of websockets.serve's lifecycle (see serve_forever) - so it's
-    testable by driving handle_connection/tick directly, without a real
-    socket."""
+    """Owns one GameEngine, every currently-connected client, and seat
+    assignment. Not itself aware of websockets.serve's lifecycle (see
+    serve_forever) - so it's testable by driving handle_connection/tick
+    directly, without a real socket.
 
-    def __init__(self, engine):
+    Only `len(config.COLORS)` connections can be seated at a time (2 for
+    the default w/b config) - the first to LOGIN gets colors[0], the next
+    colors[1], and so on; anyone past that gets login_rejected instead. A
+    connection's seat is freed when it disconnects, and LOGIN is otherwise
+    open to any client at any time - there's no restriction yet tying a
+    MOVE/JUMP to the color that's actually seated for it (see the open
+    follow-up in server/protocol.py's module docstring).
+    """
+
+    def __init__(self, engine, config=settings):
         self._engine = engine
         self._board_height = engine.snapshot().height
+        self._colors = tuple(config.COLORS)
         self._clients = set()
+        self._seats = {}  # connection -> assigned color
         self._last_tick = time.monotonic()
 
     async def handle_connection(self, connection):
@@ -85,6 +99,7 @@ class GameServer:
                 await self._handle_message(connection, raw)
         finally:
             self._clients.discard(connection)
+            self._seats.pop(connection, None)
 
     async def tick(self):
         """Advances the engine's clock by real elapsed wall-clock time and
@@ -107,6 +122,15 @@ class GameServer:
     async def _handle_message(self, connection, raw):
         try:
             command = parse_command(raw)
+        except ProtocolError as error:
+            await self._safe_send(connection, json.dumps(encode_error(str(error))))
+            return
+
+        if command.verb == "LOGIN":
+            await self._handle_login(connection, command.args[0])
+            return
+
+        try:
             cells = resolve_cells(command, self._board_height)
         except ProtocolError as error:
             await self._safe_send(connection, json.dumps(encode_error(str(error))))
@@ -122,6 +146,19 @@ class GameServer:
             return
 
         await self.broadcast()
+
+    async def _handle_login(self, connection, username):
+        # Re-login from a connection that already holds a seat just
+        # confirms the same color again, rather than consuming a second
+        # seat for the same connection.
+        color = self._seats.get(connection)
+        if color is None:
+            if len(self._seats) >= len(self._colors):
+                await self._safe_send(connection, json.dumps(encode_login_rejected("Room is full")))
+                return
+            color = self._colors[len(self._seats)]
+            self._seats[connection] = color
+        await self._safe_send(connection, json.dumps(encode_login(color, username)))
 
     async def _safe_send(self, connection, message):
         # A client can disconnect between being read from self._clients and

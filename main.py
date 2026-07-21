@@ -12,8 +12,10 @@ from realtime.real_time_arbiter import RealTimeArbiter
 from game.parser import parse_input
 from board.loaders import load_text_board, BoardParseError
 from game.board_mapper import BoardMapper
+from bus.event_bus import EventBus
 from game.engine import GameEngine
 from game.controller import Controller
+from game.presentation_stub import attach_presentation_stub
 from view.renderer import BoardRenderer
 
 
@@ -36,12 +38,18 @@ def run(input_lines, config=settings):
         promotion_rule=LastRankPromotion(config.PAWN_DIRECTION),
         config=config,
     )
+    # Bus is created (and the presentation stub attached) before the engine,
+    # so it catches even the "game_started" event the engine publishes from
+    # its own constructor.
+    events = EventBus()
+    attach_presentation_stub(events)
     engine = GameEngine(
         board=board,
         rule_engine=RuleEngine(rule_registry=registry, config=config),
         arbiter=arbiter,
         win_condition=KingCaptureWinCondition(),
         config=config,
+        events=events,
     )
     controller = Controller(
         engine=engine,

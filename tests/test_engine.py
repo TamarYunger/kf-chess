@@ -11,6 +11,7 @@ from rules.game_conditions import (
     PromotionRule,
 )
 from realtime.real_time_arbiter import RealTimeArbiter
+from bus.event_bus import EventBus
 from game.engine import GameEngine
 from rules.reasons import Reason
 from view.renderer import BoardRenderer
@@ -483,19 +484,19 @@ def test_snapshot_carries_score():
 def test_capture_publishes_score_changed_on_the_event_bus():
     engine, board = make_engine([["wR", ".", "bN"]])
     received = []
-    engine.events.subscribe("score_changed", lambda *args: received.append(args))
+    engine.events.subscribe("score_changed", lambda payload: received.append(payload))
 
     engine.request_move((0, 0), (0, 2))
     engine.wait(2 * settings.MOVE_DURATION)
 
-    assert received == [("w", settings.PIECE_VALUES["N"])]
+    assert received == [{"color": "w", "score": settings.PIECE_VALUES["N"]}]
 
 
 def test_king_capture_publishes_game_over_with_the_winner():
     rows = [["wR", ".", "bK"], [".", ".", "."], [".", ".", "."]]
     engine, board = make_engine(rows)
     received = []
-    engine.events.subscribe("game_over", lambda winner: received.append(winner))
+    engine.events.subscribe("game_over", lambda payload: received.append(payload["winner"]))
 
     engine.request_move((0, 0), (0, 2))
     engine.wait(2 * settings.MOVE_DURATION)
@@ -503,12 +504,40 @@ def test_king_capture_publishes_game_over_with_the_winner():
     assert received == ["w"]
 
 
+def test_engine_publishes_game_started_on_construction():
+    received = []
+    board = Board([["wR", ".", "."]])
+    registry = build_default_registry(settings)
+    arbiter = RealTimeArbiter(board=board, promotion_rule=LastRankPromotion(settings.PAWN_DIRECTION), config=settings)
+    bus = EventBus()
+    bus.subscribe("game_started", lambda payload: received.append(payload))
+
+    GameEngine(
+        board=board,
+        rule_engine=RuleEngine(rule_registry=registry, config=settings),
+        arbiter=arbiter,
+        win_condition=KingCaptureWinCondition(),
+        config=settings,
+        events=bus,
+    )
+
+    assert received == [{"colors": tuple(settings.COLORS)}]
+
+
+def test_accepted_move_publishes_move_log_updated():
+    engine, board = make_engine([["wR", ".", "."]])
+    received = []
+    engine.events.subscribe("move_log_updated", lambda payload: received.append(payload))
+
+    engine.request_move((0, 0), (0, 2))
+
+    assert received == [engine.move_history]
+
+
 def test_engine_shares_an_injected_event_bus_with_other_collaborators():
     # A caller (e.g. a future server) can pass its own bus in, so it can
     # subscribe before the engine exists and still catch every event -
     # instead of only being able to reach an engine-owned bus afterwards.
-    from game.events import EventBus
-
     shared_bus = EventBus()
     board = Board([["wR", ".", "."]])
     registry = build_default_registry(settings)

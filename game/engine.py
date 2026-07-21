@@ -149,6 +149,8 @@ class GameEngine:
         self._apply_events(self._arbiter.resolve())
         if self._game_over:
             return MoveResult(False, Reason.GAME_OVER)
+        if not self._board.in_bounds(*cell):
+            return MoveResult(False, Reason.OUTSIDE_BOARD)
         if self.is_busy(cell):
             return MoveResult(False, Reason.BUSY_CELL)
         if self._board.is_empty(*cell):

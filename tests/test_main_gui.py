@@ -1,6 +1,7 @@
 from config import settings
-from main_gui import build_game, with_synced_rest_durations
-from view.graphics_renderer import SIDE_PANEL_WIDTH
+from bus.event_bus import EventBus
+from main_gui import build_screens, with_synced_rest_durations
+from view.game_screen import GameScreen
 
 
 def test_with_synced_rest_durations_carries_every_config_field():
@@ -23,23 +24,46 @@ def test_with_synced_rest_durations_overrides_rest_durations():
     assert isinstance(result.LONG_REST_DURATION, (int, float))
 
 
-def test_build_game_threads_board_x_offset_into_the_board_mapper():
-    # Regression: the board's on-screen position shifted right by
-    # SIDE_PANEL_WIDTH once GraphicsRenderer started drawing a side panel
-    # before it, but nothing told BoardMapper - every real click mapped to
-    # the wrong cell. A click at the board's actual on-screen top-left
-    # corner (where the wK sits below) must select it, not miss or select
-    # some other cell.
-    board_lines = ["wK . .", ". . .", ". . ."]
-    engine, controller = build_game(board_lines, config=settings, board_x_offset=SIDE_PANEL_WIDTH)
-
-    controller.click(SIDE_PANEL_WIDTH, 0)
-    assert controller.selected == (0, 0)
+# Pixel-to-cell mapping (including the SIDE_PANEL_WIDTH offset) now lives on
+# GameScreen, not a locally-built BoardMapper - see tests/test_game_screen.py
+# for the regression this file used to cover via build_game().
 
 
-def test_build_game_without_an_offset_maps_clicks_from_the_window_origin():
-    board_lines = ["wK . .", ". . .", ". . ."]
-    engine, controller = build_game(board_lines, config=settings)
+def test_build_screens_registers_game_as_the_initial_screen():
+    events = EventBus()
+    manager = build_screens(events, settings, send=lambda message: None)
 
-    controller.click(0, 0)
-    assert controller.selected == (0, 0)
+    assert manager.current_name == "GAME"
+    assert isinstance(manager.current, GameScreen)
+
+
+def test_build_screens_wires_snapshot_events_to_the_game_screen():
+    # The bridge from network messages to screen state: main_gui.py's loop
+    # republishes every incoming message on the bus by its "type" - this
+    # confirms a "snapshot" event actually reaches GameScreen.update_snapshot
+    # without main_gui.py wiring GameEngine or the codec itself.
+    events = EventBus()
+    manager = build_screens(events, settings, send=lambda message: None)
+
+    events.publish("snapshot", {
+        "cells": [["wK", ".", "."], [".", ".", "."], [".", ".", "."]],
+        "width": 3, "height": 3, "game_over": False,
+    })
+
+    assert manager.current._snapshot is not None
+    assert manager.current._snapshot.width == 3
+
+
+def test_build_screens_forwards_clicks_to_the_network_send_callback():
+    sent = []
+    events = EventBus()
+    manager = build_screens(events, settings, send=sent.append)
+    events.publish("snapshot", {
+        "cells": [["wK", ".", "."], [".", ".", "."], [".", ".", "."]],
+        "width": 3, "height": 3, "game_over": False,
+    })
+
+    from view.graphics_renderer import SIDE_PANEL_WIDTH
+    manager.handle_click(SIDE_PANEL_WIDTH, 0)
+
+    assert sent == [{"type": "select_or_move", "cell": [0, 0]}]

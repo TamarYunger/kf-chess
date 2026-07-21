@@ -1,76 +1,35 @@
 """KungFu Chess - interactive graphical entry point.
 
-Separate from main.py (the script/test-driven CLI) so the existing tested
-batch path is untouched. Opens an Img-backed window driven by the wall clock
-and mouse: single click selects/moves, double click jumps.
+A thin network client: it owns no GameEngine/Board/rules of its own (that
+lives server-side, the same wiring main.py's run() still shows for a local/
+batch path). A NetworkClient runs the actual WebSocket connection on a
+background thread - the render loop itself is synchronous, driven by
+cv2.waitKey, and must never block on network I/O - and every message that
+arrives is drained non-blockingly once per frame, then republished on an
+EventBus. That bus is also what drives screen transitions (see
+view/screen_manager.py): adding a new screen or a new server message type
+never touches this loop.
 """
-import dataclasses
-import time
 import types
 from pathlib import Path
 
-from config import settings
-from rules.rule_registry import build_default_registry
-from rules.rule_engine import RuleEngine
-from rules.game_conditions import KingCaptureWinCondition, LastRankPromotion
-from realtime.real_time_arbiter import RealTimeArbiter
-from board.loaders import load_text_board
 from bus.event_bus import EventBus
-from game.board_mapper import BoardMapper
-from game.engine import GameEngine
-from game.controller import Controller
-from game.presentation_stub import attach_presentation_stub
-from view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
+from config import settings
+from view.game_screen import GameScreen
+from view.graphics_renderer import SIDE_PANEL_WIDTH
 from view.img import Img
+from view.network_client import NetworkClient
 from view.piece_assets import load_all_piece_configs, state_duration_ms
+from view.screen_manager import ScreenManager
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 WINDOW_NAME = "KungFu Chess"
+DEFAULT_SERVER_URL = "ws://localhost:8765"
 
-STANDARD_BOARD_TEXT = [
-    "bR bN bB bQ bK bB bN bR",
-    "bP bP bP bP bP bP bP bP",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    "wP wP wP wP wP wP wP wP",
-    "wR wN wB wQ wK wB wN wR",
-]
-
-
-def build_game(board_lines, config=settings, board_x_offset=0):
-    """Wires the same collaborators as main.run's first half (registry,
-    board, arbiter, engine, controller), stopping short of dispatching any
-    commands - the GUI loop drives them interactively instead.
-
-    `board_x_offset` is how far the board's own left edge sits from the
-    window's left edge - non-zero once GraphicsRenderer draws a side panel
-    before it, so BoardMapper can convert raw mouse coordinates correctly.
-    """
-    registry = build_default_registry(config)
-    board = load_text_board(board_lines, registry, config)
-
-    arbiter = RealTimeArbiter(
-        board=board,
-        promotion_rule=LastRankPromotion(config.PAWN_DIRECTION),
-        config=config,
-    )
-    events = EventBus()
-    attach_presentation_stub(events)
-    engine = GameEngine(
-        board=board,
-        rule_engine=RuleEngine(rule_registry=registry, config=config),
-        arbiter=arbiter,
-        win_condition=KingCaptureWinCondition(),
-        config=config,
-        events=events,
-    )
-    controller = Controller(
-        engine=engine,
-        board_mapper=BoardMapper(board, config.CELL_SIZE, x_offset=board_x_offset),
-    )
-    return engine, controller
+# cv2.waitKey's return value (Img.wait_key) when no key was pressed during
+# the frame's delay window.
+NO_KEY = 255
+ESC_KEY = 27
 
 
 def with_synced_rest_durations(config):
@@ -92,43 +51,45 @@ def with_synced_rest_durations(config):
     return types.SimpleNamespace(**overrides)
 
 
-def run_gui(board_lines=None, config=settings):
+def build_screens(events, config, send):
+    """Wires every known screen into a ScreenManager. Only GAME exists so
+    far - LOGIN/HOME/ROOM_DIALOG land in a later step, each registered here
+    the same way, with its own bus-driven `transitions=` mapping."""
+    manager = ScreenManager(events, initial="GAME")
+    game_screen = GameScreen(config, send, board_x_offset=SIDE_PANEL_WIDTH)
+    events.subscribe("snapshot", game_screen.update_snapshot)
+    manager.register("GAME", game_screen)
+    return manager
+
+
+def run_gui(server_url=DEFAULT_SERVER_URL, config=settings):
     config = with_synced_rest_durations(config)
-    engine, controller = build_game(
-        board_lines or STANDARD_BOARD_TEXT, config=config, board_x_offset=SIDE_PANEL_WIDTH,
-    )
-    renderer = GraphicsRenderer(config)
+    events = EventBus()
+    network = NetworkClient(server_url)
+    manager = build_screens(events, config, send=network.send)
 
+    network.start()
     Img.open_window(WINDOW_NAME)
-    Img.set_mouse_callback(WINDOW_NAME, on_click=controller.click, on_double_click=controller.jump)
+    Img.set_mouse_callback(WINDOW_NAME, on_click=manager.handle_click, on_double_click=manager.handle_double_click)
 
-    last_time = time.time()
+    canvas = Img.create(1, 1)
     try:
         while True:
-            now = time.time()
-            dt_ms = int((now - last_time) * 1000)
-            last_time = now
-            engine.wait(dt_ms)
+            for message in network.drain():
+                events.publish(message["type"], message.get("payload"))
 
-            legal_destinations = (
-                engine.legal_destinations(controller.selected)
-                if controller.selected is not None else frozenset()
-            )
-            snapshot = dataclasses.replace(
-                engine.snapshot(),
-                selected=controller.selected,
-                rejection_reason=controller.last_rejection,
-                legal_destinations=legal_destinations,
-            )
-            canvas = renderer.render(snapshot)
+            manager.render(canvas)
             canvas.show_frame(WINDOW_NAME)
 
             key = Img.wait_key(16)
-            if key == 27:  # ESC
+            if key == ESC_KEY:
                 break
+            if key != NO_KEY:
+                manager.handle_key(key)
             if not Img.is_window_visible(WINDOW_NAME):
                 break
     finally:
+        network.stop()
         Img.close_all_windows()
 
 

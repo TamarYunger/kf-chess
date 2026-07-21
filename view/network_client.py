@@ -64,18 +64,21 @@ class NetworkClient:
         self._thread.join(timeout=5)
 
     def send(self, message):
-        """Thread-safe: schedules `message` (a JSON-able dict) to be sent on
-        the network thread. Silently dropped while not connected - callers
-        that care should watch for "connected"/"disconnected" instead of
-        relying on this raising."""
+        """Thread-safe: schedules `message` to be sent on the network
+        thread - a `str` is sent as-is (the server's own text commands,
+        e.g. "MOVE e2 e4"), anything else is JSON-encoded first. Silently
+        dropped while not connected - callers that care should watch for
+        "connected"/"disconnected" instead of relying on this raising."""
         if self._loop is None or self._connection is None:
             return
         asyncio.run_coroutine_threadsafe(self._send_async(message), self._loop)
 
     async def _send_async(self, message):
         connection = self._connection
-        if connection is not None:
-            await connection.send(json.dumps(message))
+        if connection is None:
+            return
+        payload = message if isinstance(message, str) else json.dumps(message)
+        await connection.send(payload)
 
     def drain(self):
         """Pops every message currently queued, without blocking - for the

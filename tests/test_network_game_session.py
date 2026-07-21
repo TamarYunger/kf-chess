@@ -45,6 +45,16 @@ def make_session():
     return session, client, events
 
 
+def snapshot_message(width=3, height=3):
+    return {
+        "type": "snapshot",
+        "payload": {
+            "cells": [["." for _ in range(width)] for _ in range(height)],
+            "width": width, "height": height, "game_over": False,
+        },
+    }
+
+
 def test_starts_the_network_client_on_construction():
     session, client, events = make_session()
 
@@ -99,14 +109,6 @@ def test_every_message_is_republished_on_the_bus_by_type():
     ]
 
 
-def test_submit_command_forwards_to_the_network_client():
-    session, client, events = make_session()
-
-    session.submit_command({"type": "click", "cell": (0, 0)})
-
-    assert client.sent == [{"type": "click", "cell": (0, 0)}]
-
-
 def test_close_stops_the_network_client():
     session, client, events = make_session()
 
@@ -115,10 +117,129 @@ def test_close_stops_the_network_client():
     assert client.stopped is True
 
 
+def test_string_commands_are_forwarded_as_is():
+    # LoginScreen's "LOGIN <username>" needs no cell/square translation.
+    session, client, events = make_session()
+
+    session.submit_command("LOGIN alice")
+
+    assert client.sent == ["LOGIN alice"]
+
+
+def test_click_before_any_snapshot_sends_nothing():
+    # No board height is known yet to turn a cell into a square - matches
+    # GameScreen never producing a click before it has a snapshot to
+    # bounds-check against in the first place.
+    session, client, events = make_session()
+
+    session.submit_command({"type": "click", "cell": (0, 0)})
+
+    assert client.sent == []
+
+
+def test_first_click_does_not_send_anything_yet():
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.latest_snapshot()
+
+    session.submit_command({"type": "click", "cell": (0, 0)})
+
+    assert client.sent == []
+
+
+def test_second_click_sends_a_move_with_both_squares():
+    session, client, events = make_session()
+    client.push(snapshot_message())  # 3x3 board: (0,0) -> "a3", (0,2) -> "c3"
+    session.latest_snapshot()
+
+    session.submit_command({"type": "click", "cell": (0, 0)})
+    session.submit_command({"type": "click", "cell": (0, 2)})
+
+    assert client.sent == ["MOVE a3 c3"]
+
+
+def test_clicking_the_same_cell_twice_deselects_without_sending():
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.latest_snapshot()
+
+    session.submit_command({"type": "click", "cell": (0, 0)})
+    session.submit_command({"type": "click", "cell": (0, 0)})
+
+    assert client.sent == []
+    assert session.latest_snapshot().selected is None
+
+
+def test_a_third_click_starts_a_new_selection():
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.latest_snapshot()
+    session.submit_command({"type": "click", "cell": (0, 0)})
+    session.submit_command({"type": "click", "cell": (0, 0)})  # deselect
+
+    session.submit_command({"type": "click", "cell": (1, 1)})
+
+    assert session.latest_snapshot().selected == (1, 1)
+
+
+def test_jump_command_sends_jump_immediately():
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.latest_snapshot()
+
+    session.submit_command({"type": "jump", "cell": (0, 0)})
+
+    assert client.sent == ["JUMP a3"]
+
+
+def test_jump_clears_a_pending_selection():
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.latest_snapshot()
+    session.submit_command({"type": "click", "cell": (0, 0)})
+
+    session.submit_command({"type": "jump", "cell": (1, 1)})
+
+    assert session.latest_snapshot().selected is None
+
+
+def test_pending_selection_is_reflected_in_the_snapshot():
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.latest_snapshot()
+
+    session.submit_command({"type": "click", "cell": (0, 0)})
+
+    assert session.latest_snapshot().selected == (0, 0)
+
+
+def test_rejected_message_sets_the_rejection_reason_on_the_snapshot():
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.latest_snapshot()
+    client.push({"type": "rejected", "payload": {"reason": "illegal_piece_move"}})
+
+    snapshot = session.latest_snapshot()
+
+    assert snapshot.rejection_reason == "illegal_piece_move"
+
+
+def test_a_fresh_first_click_clears_a_stale_rejection_reason():
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.latest_snapshot()
+    client.push({"type": "rejected", "payload": {"reason": "illegal_piece_move"}})
+    session.latest_snapshot()
+
+    session.submit_command({"type": "click", "cell": (0, 0)})
+
+    assert session.latest_snapshot().rejection_reason is None
+
+
 def test_end_to_end_against_a_real_websocket_server():
     # Confirms the default (no injected fake) wiring - a real NetworkClient
-    # underneath - actually round-trips: a server-sent "snapshot" message
-    # is decoded, and a submitted command reaches the server.
+    # underneath - actually round-trips: a server-sent "snapshot" is
+    # decoded, and two clicks reach the server as one real MOVE command.
     async def scenario():
         received_from_client = []
         connected = asyncio.Event()
@@ -126,10 +247,11 @@ def test_end_to_end_against_a_real_websocket_server():
         async def handler(connection):
             connected.set()
             await connection.send(json.dumps({"type": "snapshot", "payload": {
-                "cells": [["wK"]], "width": 1, "height": 1, "game_over": False,
+                "cells": [["wR", ".", "."], [".", ".", "."], [".", ".", "."]],
+                "width": 3, "height": 3, "game_over": False,
             }}))
             async for raw in connection:
-                received_from_client.append(json.loads(raw))
+                received_from_client.append(raw)
 
         async with websockets.serve(handler, "127.0.0.1", 0) as server:
             port = server.sockets[0].getsockname()[1]
@@ -144,13 +266,17 @@ def test_end_to_end_against_a_real_websocket_server():
                 while snapshot is None and time.time() < deadline:
                     await asyncio.sleep(0.02)
                     snapshot = session.latest_snapshot()
-                assert snapshot is not None and snapshot.width == 1
+                assert snapshot is not None and snapshot.width == 3
 
                 session.submit_command({"type": "click", "cell": (0, 0)})
+                session.submit_command({"type": "click", "cell": (0, 2)})
+
                 deadline = time.time() + 5.0
                 while not received_from_client and time.time() < deadline:
                     await asyncio.sleep(0.02)
-                assert received_from_client == [{"type": "click", "cell": [0, 0]}]
+                # A genuine text command reached the server - not JSON, and
+                # not double-encoded (see NetworkClient.send's str branch).
+                assert received_from_client == ["MOVE a3 c3"]
             finally:
                 session.close()
 

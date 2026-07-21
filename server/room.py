@@ -20,10 +20,11 @@ import time
 
 import websockets.exceptions
 
+from board.piece import color_of
 from server.elo import update_ratings
 from server.protocol import (
     ProtocolError, encode_error, encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected,
-    encode_room, encode_snapshot, resolve_cells,
+    encode_room, encode_room_started, encode_snapshot, encode_waiting_for_opponent, resolve_cells,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,8 +50,18 @@ class Room:
         # after the original connection is long gone.
         self._seat_info = {}
         self._disconnected = {}  # color -> monotonic deadline (grace period pending)
+        # Latches True the first time both colors are ever seated - stays
+        # True even through a later disconnect (that's handle_disconnect's
+        # grace-period/auto-resign job, not this). Before that first time
+        # (a freshly created room with only its creator seated), no move
+        # is accepted - see handle_command.
+        self._started = len(self._colors) < 2
         self._last_tick = time.monotonic()
         self._engine.events.subscribe("game_over", self._on_game_over)
+
+    @property
+    def started(self):
+        return self._started
 
     def seat_or_view(self, connection, username, rating):
         """The single way any connection becomes part of this room -
@@ -73,6 +84,8 @@ class Room:
             self._seats[connection] = color
             self._seat_info[color] = {"username": username, "rating": rating}
             logger.info("room %s: %s seated as %s", self.room_id, username, color)
+            if not self._started and len(self._seat_info) == len(self._colors):
+                self._started = True
             return color
 
         self._viewers.add(connection)
@@ -100,10 +113,28 @@ class Room:
 
     async def welcome(self, connection, role):
         """Sent once, right after seat_or_view, to that connection alone -
-        confirms its room/role (see view.game_screen's persistent header)
-        and gives it the room's current state immediately."""
+        confirms its room/role (see view.game_screen's persistent header),
+        tells it to wait if it's the room's sole occupant so far (a fresh
+        ROOM CREATE - never true for a PLAY match, which always seats both
+        sides in the same seat_or_view pair), and gives it the room's
+        current state immediately."""
         await self._safe_send(connection, json.dumps(encode_room(self.room_id, role)))
+        if role != "viewer" and not self._started:
+            await self._safe_send(connection, json.dumps(encode_waiting_for_opponent()))
         await self._safe_send(connection, json.dumps(encode_snapshot(self._engine)))
+
+    async def notify_room_started(self, exclude):
+        """Called by GameServer right after a seat_or_view() call that just
+        flipped `started` True for the first time (a ROOM JOIN completing
+        a room a creator has been waiting alone in) - clears that waiting
+        state on whoever else is already in the room. `exclude` is the
+        connection that just joined - their own welcome() already covers
+        everything they need to know, without this extra message too."""
+        connections = (set(self._seats) | self._viewers) - {exclude}
+        if not connections:
+            return
+        message = json.dumps(encode_room_started())
+        await asyncio.gather(*(self._safe_send(c, message) for c in connections))
 
     async def handle_command(self, connection, command):
         """MOVE/JUMP only - LOGIN/PLAY/ROOM are lobby-level, handled by
@@ -117,10 +148,32 @@ class Room:
             await self._safe_send(connection, json.dumps(encode_error("Only seated players can make moves")))
             return
 
+        if not self._started:
+            logger.info("room %s: %s rejected (waiting_for_opponent)", self.room_id, command.verb)
+            await self._safe_send(connection, json.dumps(encode_rejected("waiting_for_opponent")))
+            return
+
         try:
             cells = resolve_cells(command, self._board_height)
         except ProtocolError as error:
             await self._safe_send(connection, json.dumps(encode_error(str(error))))
+            return
+
+        # A seated player may only move their own color - GameEngine itself
+        # has no notion of turns or ownership (see its own docstring: "no
+        # turns, so the two lists advance independently" - by design, for
+        # LocalGameSession's offline hotseat play, both colors are one
+        # person). Over the network that has to be enforced here, per
+        # connection, the same way viewer-vs-seated already is above:
+        # empty-source is left to GameEngine's own EMPTY_SOURCE rejection,
+        # not duplicated here.
+        source_row, source_col = cells[0]
+        source_piece = self._engine.snapshot().cells[source_row][source_col]
+        if source_piece != "." and color_of(source_piece) != self._seats[connection]:
+            logger.info(
+                "room %s: %s by %s rejected (not_your_piece)", self.room_id, command.verb, self._seats[connection],
+            )
+            await self._safe_send(connection, json.dumps(encode_rejected("not_your_piece")))
             return
 
         if command.verb == "MOVE":

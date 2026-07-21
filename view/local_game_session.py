@@ -53,6 +53,8 @@ class LocalGameSession(GameSession):
         mapper = BoardMapper(board, _IDENTITY_CELL_SIZE)
         self._controller = Controller(engine=self._engine, board_mapper=mapper)
         self._last_tick = time.time()
+        self._latest_snapshot = None
+        self._recompute_snapshot()  # available immediately, even before the first real tick()
 
     def submit_command(self, command):
         row, col = command["cell"]
@@ -61,17 +63,22 @@ class LocalGameSession(GameSession):
         elif command["type"] == "jump":
             self._controller.jump(col, row)
 
-    def latest_snapshot(self):
+    def tick(self):
         now = time.time()
         dt_ms = int((now - self._last_tick) * 1000)
         self._last_tick = now
         self._engine.wait(dt_ms)
+        self._recompute_snapshot()
 
+    def latest_snapshot(self):
+        return self._latest_snapshot
+
+    def _recompute_snapshot(self):
         selected = self._controller.selected
         legal_destinations = (
             self._engine.legal_destinations(selected) if selected is not None else frozenset()
         )
-        return dataclasses.replace(
+        self._latest_snapshot = dataclasses.replace(
             self._engine.snapshot(),
             selected=selected,
             rejection_reason=self._controller.last_rejection,

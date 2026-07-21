@@ -175,6 +175,37 @@ def test_game_over_snapshot_suppresses_the_disconnect_overlay():
     screen.render(canvas)  # must not raise, and the countdown must not be drawn
 
 
+def test_waiting_for_opponent_event_blocks_clicks_and_renders_without_raising():
+    events = EventBus()
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
+    events.publish("room", {"room_id": "abc123", "role": "w"})
+    events.publish("waiting_for_opponent", None)
+    canvas = Img.create(1, 1)
+
+    screen.render(canvas)  # must not raise, with the waiting overlay drawn
+    screen.handle_click(SIDE_PANEL_WIDTH, 0)
+    screen.handle_double_click(SIDE_PANEL_WIDTH, 0)
+
+    assert session.commands == []  # a lone creator can't move yet either
+
+
+def test_room_started_event_clears_the_waiting_state_and_allows_clicks():
+    events = EventBus()
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
+    events.publish("room", {"room_id": "abc123", "role": "w"})
+    events.publish("waiting_for_opponent", None)
+    canvas = Img.create(1, 1)
+    screen.render(canvas)  # caches a snapshot to bounds-check clicks against
+
+    events.publish("room_started", None)
+
+    assert screen._waiting_for_opponent is False
+    screen.handle_click(SIDE_PANEL_WIDTH, 0)
+    assert session.commands == [{"type": "click", "cell": (0, 0)}]
+
+
 def test_room_event_is_stored_and_rendered_without_raising():
     events = EventBus()
     session = FakeSession(snapshot=snapshot_from_json(minimal_json()))

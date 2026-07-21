@@ -11,10 +11,10 @@ class GameSession(ABC):
     the network (NetworkGameSession, talking to a real server over
     WebSocket).
 
-    Exactly two operations, deliberately: send a command, read the latest
-    state. Which concrete session is in play is decided once, at startup
-    (e.g. a future home screen's "Play Offline" vs "Login" choice) - never
-    switched mid-run.
+    Three operations, deliberately: send a command, advance one frame, read
+    the latest state. Which concrete session is in play is decided once, at
+    startup (e.g. HOME's "Play Offline" vs "Login" choice) - never switched
+    mid-run.
     """
 
     @abstractmethod
@@ -24,16 +24,29 @@ class GameSession(ABC):
         running the game - a local GameEngine or a remote server."""
 
     @abstractmethod
-    def latest_snapshot(self):
-        """Returns the most up-to-date GameSnapshot this session knows
-        about, or None if none is available yet (a network session before
-        its first message arrives; never None for a local session).
+    def tick(self):
+        """Does this session's own per-frame work - LocalGameSession
+        advances its GameEngine's clock by the elapsed wall-clock time;
+        NetworkGameSession drains its incoming-message queue and publishes
+        every message on the shared bus - and updates whatever
+        latest_snapshot() returns next.
 
-        Call exactly once per frame: this is also each implementation's one
-        chance to do its own per-frame work - LocalGameSession advances its
-        GameEngine's clock by the elapsed wall-clock time,
-        NetworkGameSession drains its incoming-message queue - so the
-        caller never needs to know which kind of work that is.
+        Call exactly once per frame, from the render loop itself
+        (main_gui.py) - never from inside a Screen's own render(). A
+        Screen has no way to know whether it's the only one that'll be
+        shown this session (see the LOGIN/HOME bug this shape replaced:
+        when only GAME called this via its own render(), a bus event
+        published while LOGIN or HOME was current - e.g. "login" itself -
+        never reached anyone, because nothing was draining the queue).
+        """
+
+    @abstractmethod
+    def latest_snapshot(self):
+        """Returns the most up-to-date GameSnapshot as of the last tick()
+        call, or None if none is available yet (a network session before
+        its first snapshot arrives; never None for a local session - see
+        each implementation's constructor). A pure read - safe to call any
+        number of times per frame, from any Screen, with no side effects.
         """
 
     def close(self):

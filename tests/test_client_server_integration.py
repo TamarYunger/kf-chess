@@ -31,8 +31,9 @@ async def _wait_until(predicate, timeout=5.0, interval=0.02):
 
 
 async def _wait_for_a_snapshot(screen, canvas):
-    """Renders (draining the session's queue - see GameScreen.render)
-    until a snapshot has actually arrived from the server."""
+    """Renders until a snapshot has actually arrived from the server - the
+    session's own queue is drained by that session's `_pump` task, not by
+    this render (see GameSession.tick's own docstring)."""
     def has_snapshot():
         screen.render(canvas)
         return screen._last_snapshot is not None
@@ -50,23 +51,39 @@ async def _tick_loop(server):
         await server.tick()
 
 
+async def _pump(session):
+    """Stands in for main_gui.py's render loop calling session.tick() once
+    per frame, regardless of which screen is current - these tests drive a
+    NetworkGameSession directly rather than through a real render loop, so
+    something still has to keep draining its incoming-message queue (and
+    republishing every message on the bus) for as long as the scenario
+    runs, exactly like the real render loop does every frame (see
+    GameSession.tick's own docstring for why this can't live inside a
+    single screen's render() instead - that's the bug this shape replaced)."""
+    while True:
+        session.tick()
+        await asyncio.sleep(0.02)
+
+
 async def _connect(url):
-    """A real NetworkGameSession, waited on until the socket is actually
+    """A real NetworkGameSession, together with a background task that
+    keeps ticking it (see `_pump`), waited on until the socket is actually
     connected (the "connected" event NetworkClient emits) - submit_command
     silently drops anything sent before then."""
     events = EventBus()
     session = NetworkGameSession(url, events)
+    pump = asyncio.create_task(_pump(session))
     connected = []
     events.subscribe("connected", lambda payload: connected.append(payload))
-    await _wait_until(lambda: (session.latest_snapshot() or True) and connected)
-    return events, session
+    await _wait_until(lambda: connected)
+    return events, session, pump
 
 
 async def _login(events, session, username, password):
     login_seen = []
     events.subscribe("login", lambda payload: login_seen.append(payload))
     session.submit_command(f"LOGIN {username} {password}")
-    assert await _wait_until(lambda: (session.latest_snapshot() or True) and login_seen)
+    assert await _wait_until(lambda: login_seen)
     return login_seen[0]
 
 
@@ -74,7 +91,7 @@ async def _create_room(events, session):
     room_seen = []
     events.subscribe("room", lambda payload: room_seen.append(payload))
     session.submit_command("ROOM CREATE")
-    assert await _wait_until(lambda: (session.latest_snapshot() or True) and room_seen)
+    assert await _wait_until(lambda: room_seen)
     return room_seen[0]
 
 
@@ -82,7 +99,7 @@ async def _join_room(events, session, room_id):
     room_seen = []
     events.subscribe("room", lambda payload: room_seen.append(payload))
     session.submit_command(f"ROOM JOIN {room_id}")
-    assert await _wait_until(lambda: (session.latest_snapshot() or True) and room_seen)
+    assert await _wait_until(lambda: room_seen)
     return room_seen[0]
 
 
@@ -94,11 +111,16 @@ def test_a_real_gui_click_reaches_the_real_server_and_moves_a_piece():
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
             tick_task = asyncio.create_task(_tick_loop(server))
-            events, session = await _connect(url)
+            events, session, pump = await _connect(url)
+            events_b, session_b, pump_b = await _connect(url)
             try:
                 await _login(events, session, "alice", "pw1")
+                await _login(events_b, session_b, "bob", "pw2")
                 room = await _create_room(events, session)
                 room_id = room["room_id"]
+                # A lone creator can't move yet (see server/room.py's own
+                # started/waiting_for_opponent gate) - someone has to join.
+                await _join_room(events_b, session_b, room_id)
 
                 screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
                 canvas = Img.create(1, 1)
@@ -126,6 +148,9 @@ def test_a_real_gui_click_reaches_the_real_server_and_moves_a_piece():
                 assert await _wait_until(lambda: room_engine.snapshot().cells[0][2] == "wR")
             finally:
                 session.close()
+                session_b.close()
+                pump.cancel()
+                pump_b.cancel()
                 tick_task.cancel()
 
     asyncio.run(scenario())
@@ -139,8 +164,8 @@ def test_two_real_clients_playing_through_the_full_stack_see_the_same_state():
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
             tick_task = asyncio.create_task(_tick_loop(server))
-            events_a, session_a = await _connect(url)
-            events_b, session_b = await _connect(url)
+            events_a, session_a, pump_a = await _connect(url)
+            events_b, session_b, pump_b = await _connect(url)
             try:
                 await _login(events_a, session_a, "alice", "pw1")
                 await _login(events_b, session_b, "bob", "pw2")
@@ -169,6 +194,8 @@ def test_two_real_clients_playing_through_the_full_stack_see_the_same_state():
             finally:
                 session_a.close()
                 session_b.close()
+                pump_a.cancel()
+                pump_b.cancel()
                 tick_task.cancel()
 
     asyncio.run(scenario())
@@ -182,9 +209,9 @@ def test_three_real_clients_room_third_joiner_is_a_viewer_and_cannot_move():
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
             tick_task = asyncio.create_task(_tick_loop(server))
-            events_a, session_a = await _connect(url)
-            events_b, session_b = await _connect(url)
-            events_c, session_c = await _connect(url)
+            events_a, session_a, pump_a = await _connect(url)
+            events_b, session_b, pump_b = await _connect(url)
+            events_c, session_c, pump_c = await _connect(url)
             try:
                 await _login(events_a, session_a, "alice", "pw1")
                 await _login(events_b, session_b, "bob", "pw2")
@@ -216,12 +243,15 @@ def test_three_real_clients_room_third_joiner_is_a_viewer_and_cannot_move():
                 events_c.subscribe("error", lambda payload: rejected.append(payload))
                 session_c.submit_command({"type": "click", "cell": (0, 0)})
                 session_c.submit_command({"type": "click", "cell": (0, 2)})
-                assert await _wait_until(lambda: (session_c.latest_snapshot() or True) and rejected)
+                assert await _wait_until(lambda: rejected)
                 assert rejected[0]["message"] == "Only seated players can make moves"
             finally:
                 session_a.close()
                 session_b.close()
                 session_c.close()
+                pump_a.cancel()
+                pump_b.cancel()
+                pump_c.cancel()
                 tick_task.cancel()
 
     asyncio.run(scenario())
@@ -247,9 +277,10 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
             tick_task = asyncio.create_task(_tick_loop(server))
-            events_a, session_a = await _connect(url)
+            events_a, session_a, pump_a = await _connect(url)
             login_a = LoginScreen(session_a, events_a)
             session_b = None
+            pump_b = None
             try:
                 # Wrong password first - the real server rejects it, and
                 # that rejection reaches LoginScreen's own error banner.
@@ -260,7 +291,6 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
                 login_a.handle_click(BUTTON_X + BUTTON_WIDTH // 2, BUTTON_Y + BUTTON_HEIGHT // 2)
 
                 def saw_the_rejection():
-                    session_a.latest_snapshot()  # drains the queue, publishing on events_a
                     return login_a._error_message is not None
 
                 assert await _wait_until(saw_the_rejection)
@@ -274,14 +304,14 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
                 type_text(login_a._password_field, "correct-password")
                 login_a.handle_click(BUTTON_X + BUTTON_WIDTH // 2, BUTTON_Y + BUTTON_HEIGHT // 2)
 
-                assert await _wait_until(lambda: (session_a.latest_snapshot() or True) and login_seen)
+                assert await _wait_until(lambda: login_seen)
                 assert login_seen[0] == {"username": "alice", "rating": 1200}
                 assert login_a._error_message is None
 
                 # bob logs in fresh (no pre-existing account), straight
                 # through the wire protocol - LoginScreen's own send path
                 # is already covered by the alice half above.
-                events_b, session_b = await _connect(url)
+                events_b, session_b, pump_b = await _connect(url)
                 bob_login = await _login(events_b, session_b, "bob", "newpassword")
                 assert bob_login == {"username": "bob", "rating": 1200}
 
@@ -310,8 +340,11 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
                     assert accounts.get_rating("alice") < 1200
             finally:
                 session_a.close()
+                pump_a.cancel()
                 if session_b is not None:
                     session_b.close()
+                if pump_b is not None:
+                    pump_b.cancel()
                 tick_task.cancel()
                 accounts.close()
 
@@ -336,8 +369,8 @@ def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
             tick_task = asyncio.create_task(_tick_loop(server))
-            events_a, session_a = await _connect(url)
-            events_b, session_b = await _connect(url)
+            events_a, session_a, pump_a = await _connect(url)
+            events_b, session_b, pump_b = await _connect(url)
             screen_a = GameScreen(settings, session_a, events_a, board_x_offset=SIDE_PANEL_WIDTH)
             screen_b = GameScreen(settings, session_b, events_b, board_x_offset=SIDE_PANEL_WIDTH)
             canvas_a, canvas_b = Img.create(1, 1), Img.create(1, 1)
@@ -350,8 +383,8 @@ def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
                 events_b.subscribe("room", lambda p: matched_b.append(p))
                 session_a.submit_command("PLAY")
                 session_b.submit_command("PLAY")
-                assert await _wait_until(lambda: (session_a.latest_snapshot() or True) and matched_a)
-                assert await _wait_until(lambda: (session_b.latest_snapshot() or True) and matched_b)
+                assert await _wait_until(lambda: matched_a)
+                assert await _wait_until(lambda: matched_b)
                 alice_color = matched_a[0]["role"]
                 bob_color = matched_b[0]["role"]
                 room_id = matched_a[0]["room_id"]
@@ -362,6 +395,7 @@ def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
 
                 # Bob's client actually drops the connection.
                 session_b.close()
+                pump_b.cancel()
 
                 def alice_sees_the_countdown():
                     screen_a.render(canvas_a)
@@ -382,6 +416,7 @@ def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
             finally:
                 session_a.close()
                 session_b.close()
+                pump_a.cancel()
                 tick_task.cancel()
 
     asyncio.run(scenario())

@@ -72,18 +72,60 @@ def test_role_of_an_unknown_connection_is_none():
 def test_welcome_sends_room_confirmation_then_snapshot():
     async def scenario():
         room, engine = make_room()
+        alice = FakeConnection()
+        bob = FakeConnection()
+        role = room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(bob, "bob", 1200)  # room is started before welcome() - no waiting message
+
+        await room.welcome(alice, role)
+
+        assert len(alice.sent) == 2
+        room_msg = json.loads(alice.sent[0])
+        assert room_msg == {"type": "room", "payload": {"room_id": "abc123", "role": settings.COLORS[0]}}
+        snapshot_msg = json.loads(alice.sent[1])
+        assert snapshot_msg["type"] == "snapshot"
+
+    run(scenario())
+
+
+def test_welcome_of_a_lone_creator_also_sends_waiting_for_opponent():
+    async def scenario():
+        room, engine = make_room()
         conn = FakeConnection()
         role = room.seat_or_view(conn, "alice", 1200)
 
         await room.welcome(conn, role)
 
-        assert len(conn.sent) == 2
-        room_msg = json.loads(conn.sent[0])
-        assert room_msg == {"type": "room", "payload": {"room_id": "abc123", "role": settings.COLORS[0]}}
-        snapshot_msg = json.loads(conn.sent[1])
-        assert snapshot_msg["type"] == "snapshot"
+        assert len(conn.sent) == 3
+        assert json.loads(conn.sent[1]) == {"type": "waiting_for_opponent", "payload": None}
 
     run(scenario())
+
+
+def test_a_lone_creator_cannot_move_before_anyone_joins():
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", ". . ."])
+        alone = FakeConnection()
+        room.seat_or_view(alone, "alice", 1200)
+
+        await room.handle_command(alone, parse_command("MOVE a3 c3"))
+
+        rejected = json.loads(alone.sent[-1])
+        assert rejected == {"type": "rejected", "payload": {"reason": "waiting_for_opponent"}}
+        assert engine.snapshot().cells[0][0] == "wR"  # untouched - never reached the engine
+
+    run(scenario())
+
+
+def test_room_started_flips_true_once_the_second_seat_is_filled():
+    room, engine = make_room()
+    assert room.started is False
+
+    room.seat_or_view(FakeConnection(), "alice", 1200)
+    assert room.started is False
+
+    room.seat_or_view(FakeConnection(), "bob", 1200)
+    assert room.started is True
 
 
 def test_seated_move_is_accepted_and_broadcast_to_everyone_in_the_room():
@@ -132,6 +174,27 @@ def test_never_joined_connection_move_is_rejected():
 
         error = json.loads(stranger.sent[-1])
         assert error["type"] == "error"
+
+    run(scenario())
+
+
+def test_a_seated_player_cannot_move_the_other_colors_piece():
+    # GameEngine itself has no notion of turns/ownership (both colors are
+    # one person for LocalGameSession's offline hotseat play) - Room is
+    # what has to enforce, per network connection, that a seated player
+    # only moves their own color.
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", "bK . ."])
+        white = FakeConnection()
+        black = FakeConnection()
+        room.seat_or_view(white, "alice", 1200)  # first color (white)
+        room.seat_or_view(black, "bob", 1200)  # second color (black)
+
+        await room.handle_command(black, parse_command("MOVE a3 c3"))  # a3 holds the white rook
+
+        rejected = json.loads(black.sent[-1])
+        assert rejected == {"type": "rejected", "payload": {"reason": "not_your_piece"}}
+        assert engine.snapshot().cells[0][0] == "wR"  # untouched - never reached the engine
 
     run(scenario())
 

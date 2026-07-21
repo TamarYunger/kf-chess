@@ -343,7 +343,7 @@ def test_room_create_seats_the_creator_as_the_first_color():
         room_id = server._connection_room[creator]
         room = server._rooms[room_id]
         assert room.role_of(creator) == settings.COLORS[0]
-        room_msg = json.loads(creator.sent[-2])
+        room_msg = json.loads(creator.sent[-3])  # login, then welcome()'s room/waiting/snapshot trio
         assert room_msg == {"type": "room", "payload": {"room_id": room_id, "role": settings.COLORS[0]}}
 
     run(scenario())
@@ -551,12 +551,25 @@ def test_periodic_tick_broadcasts_state_without_a_new_command():
                 await asyncio.sleep(0.01)
             url = f"ws://127.0.0.1:{bound['port']}"
 
-            async with websockets.connect(url) as client:
+            async with websockets.connect(url) as client, websockets.connect(url) as opponent:
                 await client.send("LOGIN alice pw1")
                 await client.recv()
                 await client.send("ROOM CREATE")
-                await client.recv()  # "room"
+                room_msg = json.loads(await client.recv())  # "room"
+                room_id = room_msg["payload"]["room_id"]
+                await client.recv()  # "waiting_for_opponent" - alone until someone joins
                 await client.recv()  # initial snapshot
+
+                # A move can't land - can't even be accepted - until a
+                # second player actually joins the room (see
+                # server/room.py's own started/waiting_for_opponent gate).
+                await opponent.send("LOGIN bob pw2")
+                await opponent.recv()
+                await opponent.send(f"ROOM JOIN {room_id}")
+                await opponent.recv()  # "room"
+                await opponent.recv()  # snapshot
+                await client.recv()  # "room_started" - alice's own waiting overlay clears
+
                 await client.send("MOVE a3 c3")
                 await client.recv()  # snapshot right after the move is accepted (still in flight)
 

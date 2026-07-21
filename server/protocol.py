@@ -234,3 +234,17 @@ def encode_opponent_disconnected(color, grace_period_seconds):
 
 def encode_opponent_reconnected(color):
     return {"type": "opponent_reconnected", "payload": {"color": color}}
+
+
+def encode_waiting_for_opponent():
+    # Sent once, right after a ROOM CREATE, only to the creator, and only
+    # if no one else is seated yet - PLAY's matchmaking always seats both
+    # sides at once, so a PLAY-matched room never sends this.
+    return {"type": "waiting_for_opponent", "payload": None}
+
+
+def encode_room_started():
+    # Broadcast once, exactly when a room's second seat is filled for the
+    # first time - clears whatever "waiting" state the creator's client
+    # is showing.
+    return {"type": "room_started", "payload": None}

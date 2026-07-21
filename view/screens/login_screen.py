@@ -9,17 +9,19 @@ from view.screen_manager import Screen
 from view.text_input import TextInput
 
 SCREEN_WIDTH = 480
-SCREEN_HEIGHT = 320
+SCREEN_HEIGHT = 340
 BG_COLOR = (40, 40, 40, 255)  # BGRA dark gray, matches GraphicsRenderer's side panels
 
 TITLE_TEXT = "KungFu Chess"
 TITLE_COLOR = (0, 215, 255, 255)  # BGRA amber
 TITLE_FONT_SCALE = 0.9
-TITLE_Y = 60
+TITLE_Y = 50
 
-FIELD_X, FIELD_Y, FIELD_WIDTH, FIELD_HEIGHT = 90, 120, 300, 40
+FIELD_X, FIELD_WIDTH, FIELD_HEIGHT = 90, 300, 40
+USERNAME_FIELD_Y = 100
+PASSWORD_FIELD_Y = 160
 
-BUTTON_X, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT = 90, 190, 300, 50
+BUTTON_X, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT = 90, 220, 300, 50
 BUTTON_COLOR = (0, 130, 0, 255)  # BGRA green
 BUTTON_TEXT_COLOR = (255, 255, 255, 255)  # BGRA white
 BUTTON_FONT_SCALE = 0.7
@@ -28,30 +30,39 @@ BUTTON_FILLED = -1  # cv2.FILLED, drawn ourselves rather than a native widget
 
 
 class LoginScreen(Screen):
-    """The GUI's entry point for network play: one username TextInput, one
-    drawn (not native - see BUTTON_FILLED) "Login" button.
+    """The GUI's entry point for network play: username + password
+    TextInputs (the password field hidden - see TextInput's own `hidden`
+    mode), one drawn (not native - see BUTTON_FILLED) "Login" button.
 
-    Submitting sends "LOGIN <username>" through the session and otherwise
-    does nothing itself - ScreenManager's own bus-driven transitions (see
-    main_gui.py's build_screens: transitions={"login": "GAME"}) are what
-    move on to the board once the server confirms a seat, so this screen
-    never needs to know what screen comes after it. Its only other job is
-    showing a rejection (e.g. "Room is full") if one arrives instead -
-    styled after GraphicsRenderer's existing rejection bar, so it reads as
-    the same kind of feedback a rejected move already gives on the board.
+    Submitting sends "LOGIN <username> <password>" through the session and
+    otherwise does nothing itself - ScreenManager's own bus-driven
+    transitions (see main_gui.py's build_screens: transitions={"login":
+    "GAME"}) are what move on to the board once the server confirms a seat,
+    so this screen never needs to know what screen comes after it. Its
+    only other job is showing a rejection (wrong password, room full, ...)
+    if one arrives instead - styled after GraphicsRenderer's existing
+    rejection bar, so it reads as the same kind of feedback a rejected
+    move already gives on the board.
     """
 
     def __init__(self, session, events):
         self._session = session
         self._events = events
         self._username_field = TextInput(
-            FIELD_X, FIELD_Y, FIELD_WIDTH, FIELD_HEIGHT, placeholder="Username", on_submit=self._on_submit,
+            FIELD_X, USERNAME_FIELD_Y, FIELD_WIDTH, FIELD_HEIGHT,
+            placeholder="Username", on_submit=self._focus_password,
+        )
+        self._password_field = TextInput(
+            FIELD_X, PASSWORD_FIELD_Y, FIELD_WIDTH, FIELD_HEIGHT,
+            placeholder="Password", hidden=True, on_submit=self._on_submit,
         )
         self._error_message = None
         events.subscribe("login_rejected", self._on_login_rejected)
 
     def on_enter(self):
         self._username_field.clear()
+        self._password_field.clear()
+        self._password_field.blur()
         self._username_field.focus()
         self._error_message = None
 
@@ -61,6 +72,7 @@ class LoginScreen(Screen):
         canvas.put_text(TITLE_TEXT, (SCREEN_WIDTH - text_w) // 2, TITLE_Y, TITLE_FONT_SCALE, TITLE_COLOR, 2)
 
         self._username_field.render(canvas)
+        self._password_field.render(canvas)
         self._draw_login_button(canvas)
 
         if self._error_message is not None:
@@ -69,23 +81,36 @@ class LoginScreen(Screen):
     def handle_click(self, x, y):
         if self._username_field.handle_click(x, y):
             return  # the field claimed this click (and is now focused)
+        if self._password_field.handle_click(x, y):
+            return
         if self._button_contains(x, y):
             self._submit()
 
     def handle_key(self, key):
-        self._username_field.handle_key(key)  # Enter -> _on_submit, no-op while unfocused
+        # Only one of the two is ever focused - TextInput.handle_key is a
+        # no-op while unfocused, so routing the key to both is safe.
+        self._username_field.handle_key(key)
+        self._password_field.handle_key(key)
 
     # -- internal ------------------------------------------------------
 
-    def _on_submit(self, username):
+    def _focus_password(self, _username):
+        # Enter in the username field moves on to the password field
+        # instead of submitting with whatever (possibly empty) password
+        # is currently there.
+        self._username_field.blur()
+        self._password_field.focus()
+
+    def _on_submit(self, _password):
         self._submit()
 
     def _submit(self):
         username = self._username_field.value.strip()
-        if not username:
+        password = self._password_field.value
+        if not username or not password:
             return
         self._error_message = None
-        self._session.submit_command(f"LOGIN {username}")
+        self._session.submit_command(f"LOGIN {username} {password}")
 
     def _button_contains(self, x, y):
         return BUTTON_X <= x <= BUTTON_X + BUTTON_WIDTH and BUTTON_Y <= y <= BUTTON_Y + BUTTON_HEIGHT

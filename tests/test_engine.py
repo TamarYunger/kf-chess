@@ -243,6 +243,21 @@ def test_jump_on_empty_cell_is_rejected():
     assert result.reason == Reason.EMPTY_CELL
 
 
+def test_jump_outside_the_board_is_rejected_not_a_crash():
+    # Regression: request_jump used to go straight to board.is_empty(*cell)
+    # with no bounds check (unlike request_move, which is guarded by
+    # RuleEngine.validate_move) - harmless while every caller filtered
+    # out-of-bounds cells first (BoardMapper returns None for those), but a
+    # crash risk for any caller that resolves a cell some other way (e.g. a
+    # network server parsing raw coordinates from a client).
+    engine, board = make_engine([["wR", ".", "."], [".", ".", "."], [".", ".", "."]])
+
+    result = engine.request_jump((-1, 0))
+
+    assert not result.is_accepted
+    assert result.reason == Reason.OUTSIDE_BOARD
+
+
 def test_pawn_promotion_on_arrival():
     # white pawn one step from the last rank (row 0) is promoted to a queen
     rows = [[".", ".", "."], ["wP", ".", "."], [".", ".", "."]]

@@ -20,6 +20,22 @@ def square_name(cell, board_height):
     return f"{file_letter}{rank}"
 
 
+def parse_square(name, board_height):
+    """Inverse of square_name: "e2" -> (row, col). Raises ValueError for
+    anything that isn't <letter><digits> (e.g. a malformed or empty
+    string) - never IndexError/TypeError - so a caller parsing untrusted
+    input (see server/protocol.py) can catch one exception type. Does not
+    itself bounds-check the result against the board's width - callers
+    that need a guaranteed-in-bounds cell should also check that (see
+    Board.in_bounds / RuleEngine.validate_move)."""
+    if len(name) < 2 or not name[0].isalpha() or not name[1:].isdigit():
+        raise ValueError(f"Malformed square: {name!r}")
+    col = ord(name[0].lower()) - ord("a")
+    rank = int(name[1:])
+    row = board_height - rank
+    return row, col
+
+
 def move_notation(record, board_height):
     """"Pawn e2-e4", "Knight g1-f3" - the full kind name is used (not the
     single-letter code) so the piece that moved is unambiguous at a

@@ -4,7 +4,9 @@ import time
 
 import websockets
 
+from bus.event_bus import EventBus
 from config import settings
+from server.db import AccountStore
 from server.ws_server import GameServer, build_engine, serve_forever
 
 
@@ -148,7 +150,7 @@ def test_first_login_is_assigned_the_first_configured_color():
         engine = build_engine(["wK . .", ". . .", ". . ."], settings)
         server = GameServer(engine)
 
-        conn = FakeConnection(incoming=["LOGIN alice"])
+        conn = FakeConnection(incoming=["LOGIN alice pw1"])
         await server.handle_connection(conn)
 
         login = json.loads(conn.sent[1])
@@ -163,7 +165,7 @@ def test_second_login_from_a_different_connection_gets_the_second_color():
         server = GameServer(engine)
         server._seats[FakeConnection()] = settings.COLORS[0]  # someone already seated first
 
-        conn = FakeConnection(incoming=["LOGIN bob"])
+        conn = FakeConnection(incoming=["LOGIN bob pw2"])
         await server.handle_connection(conn)
 
         login = json.loads(conn.sent[1])
@@ -179,7 +181,7 @@ def test_third_login_is_rejected_room_full():
         server._seats[FakeConnection()] = settings.COLORS[0]
         server._seats[FakeConnection()] = settings.COLORS[1]
 
-        conn = FakeConnection(incoming=["LOGIN carol"])
+        conn = FakeConnection(incoming=["LOGIN carol pw3"])
         await server.handle_connection(conn)
 
         rejected = json.loads(conn.sent[1])
@@ -193,7 +195,7 @@ def test_relogin_from_an_already_seated_connection_returns_the_same_color():
         engine = build_engine(["wK . .", ". . .", ". . ."], settings)
         server = GameServer(engine)
 
-        conn = FakeConnection(incoming=["LOGIN alice", "LOGIN alice-again"])
+        conn = FakeConnection(incoming=["LOGIN alice pw1", "LOGIN alice pw1"])
         await server.handle_connection(conn)
 
         first = json.loads(conn.sent[1])["payload"]["color"]
@@ -210,15 +212,118 @@ def test_disconnecting_frees_the_seat_for_the_next_login():
         engine = build_engine(["wK . .", ". . .", ". . ."], settings)
         server = GameServer(engine)
 
-        first = FakeConnection(incoming=["LOGIN alice"])
+        first = FakeConnection(incoming=["LOGIN alice pw1"])
         await server.handle_connection(first)  # logs in, then "disconnects" (incoming exhausted)
         assert first not in server._seats
 
-        second = FakeConnection(incoming=["LOGIN bob"])
+        second = FakeConnection(incoming=["LOGIN bob pw2"])
         await server.handle_connection(second)
 
         login = json.loads(second.sent[1])
         assert login["payload"]["color"] == settings.COLORS[0]  # the freed seat, not a rejection
+
+    run(scenario())
+
+
+def test_first_login_registers_the_account_at_the_default_rating():
+    async def scenario():
+        engine = build_engine(["wK . .", ". . .", ". . ."], settings)
+        accounts = AccountStore()
+        server = GameServer(engine, accounts=accounts)
+
+        conn = FakeConnection(incoming=["LOGIN alice secret123"])
+        await server.handle_connection(conn)
+
+        assert accounts.get_rating("alice") == 1200
+
+    run(scenario())
+
+
+def test_wrong_password_is_rejected_and_consumes_no_seat():
+    async def scenario():
+        engine = build_engine(["wK . .", ". . .", ". . ."], settings)
+        accounts = AccountStore()
+        accounts.authenticate("alice", "correct-password")  # pre-register the account
+        server = GameServer(engine, accounts=accounts)
+
+        conn = FakeConnection(incoming=["LOGIN alice wrong-password"])
+        await server.handle_connection(conn)
+
+        rejected = json.loads(conn.sent[1])
+        assert rejected == {"type": "login_rejected", "payload": {"message": "Invalid password"}}
+        assert len(server._seats) == 0
+
+    run(scenario())
+
+
+def test_correct_password_on_an_existing_account_is_seated_normally():
+    async def scenario():
+        engine = build_engine(["wK . .", ". . .", ". . ."], settings)
+        accounts = AccountStore()
+        accounts.authenticate("alice", "correct-password")
+        server = GameServer(engine, accounts=accounts)
+
+        conn = FakeConnection(incoming=["LOGIN alice correct-password"])
+        await server.handle_connection(conn)
+
+        login = json.loads(conn.sent[1])
+        assert login == {"type": "login", "payload": {"color": settings.COLORS[0], "username": "alice"}}
+
+    run(scenario())
+
+
+# -- Rating updates on game over ---------------------------------------------
+
+
+def test_ratings_update_when_the_game_ends():
+    async def scenario():
+        events = EventBus()
+        engine = build_engine(["wR . .", ". . .", "bK . ."], settings, events=events)
+        accounts = AccountStore()
+        server = GameServer(engine, accounts=accounts, events=events)
+
+        # Seated directly via _handle_login (not handle_connection's full
+        # per-message loop, which - being a FakeConnection whose incoming
+        # queue would be immediately exhausted - would already have "hung
+        # up" and freed the seat again by the time it returns; these two
+        # need to stay seated while the game actually plays out below).
+        white, black = FakeConnection(), FakeConnection()
+        await server._handle_login(white, "alice", "pw1")
+        await server._handle_login(black, "bob", "pw2")
+        assert accounts.get_rating("alice") == 1200
+        assert accounts.get_rating("bob") == 1200
+
+        # White's rook captures black's king in one move - an immediate
+        # game over (KingCaptureWinCondition), no waiting for it to land.
+        engine.request_move((0, 0), (2, 0))
+        engine.wait(3 * settings.MOVE_DURATION)
+
+        assert engine.game_over is True
+        assert accounts.get_rating("alice") > 1200  # winner gained rating
+        assert accounts.get_rating("bob") < 1200  # loser lost rating
+
+    run(scenario())
+
+
+def test_no_events_bus_means_ratings_are_simply_never_updated():
+    # GameServer(engine) without events= (the default) - a valid, tested
+    # configuration (every earlier test in this file uses it) - must not
+    # crash when a game ends; it just doesn't touch the accounts store.
+    async def scenario():
+        engine = build_engine(["wR . .", ". . .", "bK . ."], settings)
+        accounts = AccountStore()
+        server = GameServer(engine, accounts=accounts)  # no events=
+
+        white, black = FakeConnection(), FakeConnection()
+        await server._handle_login(white, "alice", "pw1")
+        await server._handle_login(black, "bob", "pw2")
+
+        engine.request_move((0, 0), (2, 0))
+        engine.wait(3 * settings.MOVE_DURATION)
+
+        assert engine.game_over is True
+        assert accounts.get_rating("alice") == 1200
+        assert accounts.get_rating("bob") == 1200
 
     run(scenario())
 
@@ -272,9 +377,9 @@ def test_three_real_clients_login_first_two_seated_third_rejected():
                 await bob.recv()
                 await carol.recv()
 
-                await alice.send("LOGIN alice")
-                await bob.send("LOGIN bob")
-                await carol.send("LOGIN carol")
+                await alice.send("LOGIN alice pw1")
+                await bob.send("LOGIN bob pw2")
+                await carol.send("LOGIN carol pw3")
 
                 alice_login = json.loads(await alice.recv())
                 bob_login = json.loads(await bob.recv())

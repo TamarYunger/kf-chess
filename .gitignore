@@ -22,6 +22,9 @@ ENV/
 .tox/
 # htmlcov/ is intentionally committed as a browsable coverage report
 
+# Local server data
+server/*.db
+
 # Type checkers / linters
 .mypy_cache/
 .ruff_cache/

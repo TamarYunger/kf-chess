@@ -8,12 +8,14 @@ without a running server.
 Client -> server (one command per text message):
     "MOVE <start-square> <end-square>"   e.g. "MOVE e2 e4"
     "JUMP <square>"                      e.g. "JUMP e2"
-    "LOGIN <username>"                   e.g. "LOGIN alice"
+    "LOGIN <username> <password>"        e.g. "LOGIN alice hunter2"
 Squares are algebraic notation (view.notation.square_name/parse_square) -
 letter file, then rank counting up from the bottom row - so a command
 never depends on window pixels or a particular board size beyond the
-board's own height. LOGIN's argument is a plain username, not a square -
-see resolve_cells vs. Command.args directly.
+board's own height. LOGIN's arguments are a plain username/password, not
+squares - see resolve_cells vs. Command.args directly. A username seen
+for the first time is registered with that password (server.db); an
+existing one is authenticated against it.
 
 Server -> client (JSON-encoded):
     {"type": "snapshot", "payload": {...}}   - same shape
@@ -37,7 +39,7 @@ from dataclasses import dataclass
 
 from view.notation import parse_square
 
-_ARITY = {"MOVE": 2, "JUMP": 1, "LOGIN": 1}
+_ARITY = {"MOVE": 2, "JUMP": 1, "LOGIN": 2}
 
 
 class ProtocolError(Exception):
@@ -48,15 +50,16 @@ class ProtocolError(Exception):
 @dataclass(frozen=True)
 class Command:
     verb: str
-    args: tuple  # raw strings - algebraic squares for MOVE/JUMP, a
-    # username for LOGIN - not yet resolved/validated, see resolve_cells
+    args: tuple  # raw strings - algebraic squares for MOVE/JUMP,
+    # (username, password) for LOGIN - not yet resolved/validated, see
+    # resolve_cells
 
 
 def parse_command(line):
     """"MOVE e2 e4" -> Command("MOVE", ("e2", "e4")). Args are left as text
     here - turning a MOVE/JUMP arg into a (row, col) needs the board's
-    height, which this module doesn't have; see resolve_cells. LOGIN's arg
-    needs no further resolution - use command.args[0] directly."""
+    height, which this module doesn't have; see resolve_cells. LOGIN's args
+    need no further resolution - use command.args[0]/[1] directly."""
     parts = line.split()
     if not parts:
         raise ProtocolError("Empty command")
@@ -77,7 +80,7 @@ def resolve_cells(command, board_height):
     """A MOVE/JUMP Command's raw algebraic squares -> a tuple of (row, col)
     cells. Kept separate from parse_command because it needs board_height,
     which the wire format itself has no business knowing. Not meaningful
-    for LOGIN - its single arg is a username, not a square."""
+    for LOGIN - its args are a username/password, not squares."""
     try:
         return tuple(parse_square(square, board_height) for square in command.args)
     except ValueError as error:

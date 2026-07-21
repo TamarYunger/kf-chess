@@ -107,17 +107,22 @@ def test_encode_rejected_serializes_the_reason_as_its_plain_value():
 
 
 def test_parse_command_login():
-    assert parse_command("LOGIN alice") == Command("LOGIN", ("alice",))
+    assert parse_command("LOGIN alice hunter2") == Command("LOGIN", ("alice", "hunter2"))
 
 
-def test_parse_command_login_rejects_a_missing_username():
+def test_parse_command_login_rejects_a_missing_password():
+    with pytest.raises(ProtocolError):
+        parse_command("LOGIN alice")
+
+
+def test_parse_command_login_rejects_a_missing_username_and_password():
     with pytest.raises(ProtocolError):
         parse_command("LOGIN")
 
 
-def test_parse_command_login_rejects_more_than_one_argument():
+def test_parse_command_login_rejects_more_than_two_arguments():
     with pytest.raises(ProtocolError):
-        parse_command("LOGIN alice bob")
+        parse_command("LOGIN alice hunter2 extra")
 
 
 def test_encode_login_shape():

@@ -2,6 +2,7 @@ from config import settings
 from view.game_screen import GameScreen
 from view.graphics_renderer import SIDE_PANEL_WIDTH
 from view.img import Img
+from view.snapshot_codec import snapshot_from_json
 
 
 def minimal_json(**overrides):
@@ -15,8 +16,27 @@ def minimal_json(**overrides):
     return data
 
 
-def test_renders_a_connecting_placeholder_before_any_snapshot():
-    screen = GameScreen(settings, send=lambda message: None)
+class FakeSession:
+    """A minimal GameSession fake - no LocalGameSession/NetworkGameSession
+    involved - so these tests exercise only GameScreen's own contract with
+    GameSession, not either concrete implementation."""
+
+    def __init__(self, snapshot=None):
+        self._snapshot = snapshot
+        self.commands = []
+
+    def submit_command(self, command):
+        self.commands.append(command)
+
+    def latest_snapshot(self):
+        return self._snapshot
+
+    def close(self):
+        pass
+
+
+def test_renders_a_connecting_placeholder_when_the_session_has_no_snapshot_yet():
+    screen = GameScreen(settings, FakeSession(snapshot=None))
     canvas = Img.create(1, 1)
 
     screen.render(canvas)
@@ -25,11 +45,11 @@ def test_renders_a_connecting_placeholder_before_any_snapshot():
     assert canvas.img.shape[0] > 1 and canvas.img.shape[1] > 1
 
 
-def test_renders_the_board_once_a_snapshot_arrives():
-    screen = GameScreen(settings, send=lambda message: None)
+def test_renders_the_board_once_the_session_has_a_snapshot():
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session)
     canvas = Img.create(1, 1)
 
-    screen.update_snapshot(minimal_json())
     screen.render(canvas)
 
     # 3x3 board at settings.CELL_SIZE plus the two side panels.
@@ -39,53 +59,73 @@ def test_renders_the_board_once_a_snapshot_arrives():
     assert canvas.img.shape[0] == expected_h
 
 
-def test_click_before_any_snapshot_sends_nothing():
-    sent = []
-    screen = GameScreen(settings, send=sent.append)
+def test_click_before_any_snapshot_submits_nothing():
+    session = FakeSession(snapshot=None)
+    screen = GameScreen(settings, session)
 
-    screen.handle_click(SIDE_PANEL_WIDTH, 0)
+    screen.handle_click(SIDE_PANEL_WIDTH, 0)  # no render() yet -> no cached snapshot
 
-    assert sent == []
+    assert session.commands == []
 
 
-def test_click_on_the_board_sends_select_or_move_with_the_offset_applied():
-    sent = []
-    screen = GameScreen(settings, send=sent.append, board_x_offset=SIDE_PANEL_WIDTH)
-    screen.update_snapshot(minimal_json())
+def test_click_on_the_board_submits_a_click_command_with_the_offset_applied():
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, board_x_offset=SIDE_PANEL_WIDTH)
+    canvas = Img.create(1, 1)
+    screen.render(canvas)  # caches the snapshot for bounds-checking
 
     # Top-left board cell (0, 0) sits at x == SIDE_PANEL_WIDTH on screen,
     # not x == 0 - the side panel is drawn first (mirrors the old
-    # BoardMapper offset test in test_main_gui.py).
+    # BoardMapper offset regression test).
     screen.handle_click(SIDE_PANEL_WIDTH, 0)
 
-    assert sent == [{"type": "select_or_move", "cell": [0, 0]}]
+    assert session.commands == [{"type": "click", "cell": (0, 0)}]
 
 
-def test_click_outside_the_board_sends_nothing():
-    sent = []
-    screen = GameScreen(settings, send=sent.append, board_x_offset=SIDE_PANEL_WIDTH)
-    screen.update_snapshot(minimal_json())
+def test_click_outside_the_board_submits_nothing():
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, board_x_offset=SIDE_PANEL_WIDTH)
+    canvas = Img.create(1, 1)
+    screen.render(canvas)
 
     screen.handle_click(0, 0)  # lands in the left side panel, not the board
 
-    assert sent == []
+    assert session.commands == []
 
 
-def test_double_click_sends_jump():
-    sent = []
-    screen = GameScreen(settings, send=sent.append, board_x_offset=SIDE_PANEL_WIDTH)
-    screen.update_snapshot(minimal_json())
+def test_double_click_submits_a_jump_command():
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, board_x_offset=SIDE_PANEL_WIDTH)
+    canvas = Img.create(1, 1)
+    screen.render(canvas)
 
     screen.handle_double_click(SIDE_PANEL_WIDTH + settings.CELL_SIZE, settings.CELL_SIZE)
 
-    assert sent == [{"type": "jump", "cell": [1, 1]}]
+    assert session.commands == [{"type": "jump", "cell": (1, 1)}]
 
 
-def test_click_below_the_board_bounds_sends_nothing():
-    sent = []
-    screen = GameScreen(settings, send=sent.append, board_x_offset=SIDE_PANEL_WIDTH)
-    screen.update_snapshot(minimal_json())
+def test_click_below_the_board_bounds_submits_nothing():
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, board_x_offset=SIDE_PANEL_WIDTH)
+    canvas = Img.create(1, 1)
+    screen.render(canvas)
 
     screen.handle_click(SIDE_PANEL_WIDTH, 3 * settings.CELL_SIZE + 5)
 
-    assert sent == []
+    assert session.commands == []
+
+
+def test_click_bounds_check_uses_the_snapshot_cached_at_the_last_render():
+    # handle_click runs from the mouse callback, not the per-frame render
+    # call - it must never call session.latest_snapshot() itself (that
+    # would, for a LocalGameSession, advance the engine's clock from a
+    # click instead of once per frame).
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json()))
+    screen = GameScreen(settings, session, board_x_offset=SIDE_PANEL_WIDTH)
+    canvas = Img.create(1, 1)
+    screen.render(canvas)
+
+    session._snapshot = None  # session moved on; screen must still use its cache
+    screen.handle_click(SIDE_PANEL_WIDTH, 0)
+
+    assert session.commands == [{"type": "click", "cell": (0, 0)}]

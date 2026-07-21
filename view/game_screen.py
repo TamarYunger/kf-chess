@@ -3,7 +3,6 @@ from __future__ import annotations
 from view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
 from view.img import Img
 from view.screen_manager import Screen
-from view.snapshot_codec import snapshot_from_json
 
 CONNECTING_TEXT = "Connecting to server..."
 CONNECTING_TEXT_COLOR = (230, 230, 230, 255)  # BGRA near-white
@@ -19,50 +18,52 @@ DEFAULT_BOARD_SIZE = 8
 
 class GameScreen(Screen):
     """The board screen (the GUI's only screen for now - login/room screens
-    come later): renders whatever snapshot the network client's last
-    "snapshot" message carried, and turns clicks/double-clicks into outgoing
-    commands instead of calling a local GameEngine directly.
+    come later): renders whatever GameSnapshot its GameSession currently
+    has, and turns clicks/double-clicks into commands submitted through
+    that same session - it never knows or cares whether the session is
+    local (LocalGameSession) or networked (NetworkGameSession).
 
     GraphicsRenderer's own contract - snapshot in, canvas out - is
-    untouched; this screen just decodes the wire JSON into the same
-    GameSnapshot GraphicsRenderer always took, then copies its output into
-    the canvas ScreenManager handed this screen (see Screen.render).
+    untouched; this screen just copies its output into the canvas
+    ScreenManager handed this screen (see Screen.render).
     """
 
-    def __init__(self, config, send, board_x_offset=SIDE_PANEL_WIDTH):
+    def __init__(self, config, session, board_x_offset=SIDE_PANEL_WIDTH):
         self._config = config
-        self._send = send
+        self._session = session
         self._board_x_offset = board_x_offset
         self._renderer = GraphicsRenderer(config)
-        self._snapshot = None
-
-    def update_snapshot(self, payload):
-        """Subscribe this to the bus's "snapshot" event - see main_gui.py."""
-        self._snapshot = snapshot_from_json(payload)
+        self._last_snapshot = None
 
     def render(self, canvas):
-        if self._snapshot is None:
+        # The one call per frame that lets the session do its own
+        # per-frame work (advance a local clock / drain a network queue) -
+        # see GameSession.latest_snapshot. Cached for handle_click/
+        # handle_double_click, which run from the mouse callback, not this
+        # per-frame render call, and must not themselves trigger that work.
+        self._last_snapshot = self._session.latest_snapshot()
+        if self._last_snapshot is None:
             self._render_connecting(canvas)
             return
-        rendered = self._renderer.render(self._snapshot)
+        rendered = self._renderer.render(self._last_snapshot)
         canvas.img = rendered.img
 
     def handle_click(self, x, y):
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
-            self._send({"type": "select_or_move", "cell": list(cell)})
+            self._session.submit_command({"type": "click", "cell": cell})
 
     def handle_double_click(self, x, y):
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
-            self._send({"type": "jump", "cell": list(cell)})
+            self._session.submit_command({"type": "jump", "cell": cell})
 
     def _pixel_to_cell(self, x, y):
-        if self._snapshot is None:
+        if self._last_snapshot is None:
             return None
         cell_size = self._config.CELL_SIZE
         row, col = y // cell_size, (x - self._board_x_offset) // cell_size
-        if 0 <= row < self._snapshot.height and 0 <= col < self._snapshot.width:
+        if 0 <= row < self._last_snapshot.height and 0 <= col < self._last_snapshot.width:
             return row, col
         return None
 

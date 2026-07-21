@@ -42,16 +42,26 @@ class NetworkClient:
         self._thread = None
         self._task = None
         self._connection = None
+        # Set once _run() has assigned self._loop/self._task, on the
+        # background thread - stop() must not act on either before then.
+        # Without this, calling stop() right after start() (there is
+        # nothing unusual about that timing - it's just two calls with no
+        # work in between) can race the thread's own startup: self._loop/
+        # self._task are still None, so stop() would silently skip
+        # cancelling anything and fall straight through to a useless 5s
+        # join() timeout, leaking a connection attempt that runs forever.
+        self._ready = threading.Event()
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self):
-        if self._loop is not None and self._task is not None:
+        if self._thread is None:
+            return  # start() was never called - nothing to wait for or cancel
+        if self._ready.wait(timeout=5) and self._task is not None:
             self._loop.call_soon_threadsafe(self._task.cancel)
-        if self._thread is not None:
-            self._thread.join(timeout=5)
+        self._thread.join(timeout=5)
 
     def send(self, message):
         """Thread-safe: schedules `message` (a JSON-able dict) to be sent on
@@ -84,6 +94,7 @@ class NetworkClient:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self._task = self._loop.create_task(self._connect_loop())
+        self._ready.set()
         try:
             self._loop.run_until_complete(self._task)
         except asyncio.CancelledError:

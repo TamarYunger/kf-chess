@@ -111,6 +111,23 @@ def test_stop_before_start_does_not_raise():
     client.stop()  # no background thread was ever started
 
 
+def test_stop_called_immediately_after_start_does_not_block():
+    # Regression: stop() used to read self._loop/self._task without
+    # synchronizing with _run() setting them on the background thread -
+    # calling stop() this soon after start() (nothing unusual about that
+    # timing) could race ahead of that assignment, silently skip
+    # cancelling anything, and fall through to a useless full 5s join()
+    # timeout instead of actually stopping quickly.
+    client = NetworkClient("ws://127.0.0.1:1", close_timeout=0.5, open_timeout=2, reconnect_delay=0.1)
+    client.start()
+
+    start = time.time()
+    client.stop()
+    elapsed = time.time() - start
+
+    assert elapsed < 2.0
+
+
 def test_stop_joins_the_background_thread():
     async def scenario():
         async def handler(connection):

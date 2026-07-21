@@ -1,7 +1,12 @@
+import pytest
+
 from config import settings
 from bus.event_bus import EventBus
-from main_gui import build_screens, with_synced_rest_durations
+from main_gui import build_screens, build_session, with_synced_rest_durations
 from view.game_screen import GameScreen
+from view.graphics_renderer import SIDE_PANEL_WIDTH
+from view.local_game_session import LocalGameSession
+from view.network_game_session import NetworkGameSession
 
 
 def test_with_synced_rest_durations_carries_every_config_field():
@@ -24,46 +29,57 @@ def test_with_synced_rest_durations_overrides_rest_durations():
     assert isinstance(result.LONG_REST_DURATION, (int, float))
 
 
-# Pixel-to-cell mapping (including the SIDE_PANEL_WIDTH offset) now lives on
-# GameScreen, not a locally-built BoardMapper - see tests/test_game_screen.py
-# for the regression this file used to cover via build_game().
+def test_build_session_local_mode_returns_a_working_offline_session():
+    # The point of "mode" defaulting to "local": main_gui.py must still be
+    # able to run a full game with no server involved at all.
+    events = EventBus()
+    session = build_session("local", events, settings, board_lines=["wK . .", ". . .", ". . ."])
+
+    assert isinstance(session, LocalGameSession)
+    assert session.latest_snapshot().cells[0][0] == "wK"
+
+
+def test_build_session_network_mode_returns_a_network_session_without_connecting_yet():
+    events = EventBus()
+    session = build_session("network", events, settings, server_url="ws://127.0.0.1:1")
+
+    try:
+        assert isinstance(session, NetworkGameSession)
+        # No server is actually listening - this must not raise; the
+        # session just has no snapshot yet.
+        assert session.latest_snapshot() is None
+    finally:
+        session.close()
+
+
+def test_build_session_rejects_an_unknown_mode():
+    events = EventBus()
+    with pytest.raises(ValueError):
+        build_session("bogus", events, settings)
 
 
 def test_build_screens_registers_game_as_the_initial_screen():
     events = EventBus()
-    manager = build_screens(events, settings, send=lambda message: None)
+    session = build_session("local", events, settings, board_lines=["wK . .", ". . .", ". . ."])
+    manager = build_screens(events, settings, session)
 
     assert manager.current_name == "GAME"
     assert isinstance(manager.current, GameScreen)
 
 
-def test_build_screens_wires_snapshot_events_to_the_game_screen():
-    # The bridge from network messages to screen state: main_gui.py's loop
-    # republishes every incoming message on the bus by its "type" - this
-    # confirms a "snapshot" event actually reaches GameScreen.update_snapshot
-    # without main_gui.py wiring GameEngine or the codec itself.
+def test_build_screens_click_reaches_the_underlying_local_session():
+    # End-to-end through the pieces main_gui.py actually wires together:
+    # ScreenManager -> GameScreen -> GameSession -> GameEngine, entirely
+    # offline. This is the click-mapping regression test that used to run
+    # through build_game()/Controller/BoardMapper directly.
     events = EventBus()
-    manager = build_screens(events, settings, send=lambda message: None)
+    session = build_session("local", events, settings, board_lines=["wK . .", ". . .", ". . ."])
+    manager = build_screens(events, settings, session)
 
-    events.publish("snapshot", {
-        "cells": [["wK", ".", "."], [".", ".", "."], [".", ".", "."]],
-        "width": 3, "height": 3, "game_over": False,
-    })
+    from view.img import Img
+    canvas = Img.create(1, 1)
+    manager.render(canvas)  # lets GameScreen cache a snapshot to bounds-check against
 
-    assert manager.current._snapshot is not None
-    assert manager.current._snapshot.width == 3
-
-
-def test_build_screens_forwards_clicks_to_the_network_send_callback():
-    sent = []
-    events = EventBus()
-    manager = build_screens(events, settings, send=sent.append)
-    events.publish("snapshot", {
-        "cells": [["wK", ".", "."], [".", ".", "."], [".", ".", "."]],
-        "width": 3, "height": 3, "game_over": False,
-    })
-
-    from view.graphics_renderer import SIDE_PANEL_WIDTH
     manager.handle_click(SIDE_PANEL_WIDTH, 0)
 
-    assert sent == [{"type": "select_or_move", "cell": [0, 0]}]
+    assert session.latest_snapshot().selected == (0, 0)

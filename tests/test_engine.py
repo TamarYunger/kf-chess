@@ -519,6 +519,44 @@ def test_king_capture_publishes_game_over_with_the_winner():
     assert received == ["w"]
 
 
+def test_resign_ends_the_game_in_favor_of_the_other_color():
+    engine, board = make_engine([["wK", ".", "."], [".", ".", "."], [".", ".", "bK"]])
+
+    engine.resign("w")
+
+    assert engine.game_over is True
+    assert engine.winner == "b"
+
+
+def test_resign_publishes_resign_then_game_over():
+    engine, board = make_engine([["wK", ".", "."], [".", ".", "."], [".", ".", "bK"]])
+    received = []
+    engine.events.subscribe("resign", lambda payload: received.append(("resign", payload)))
+    engine.events.subscribe("game_over", lambda payload: received.append(("game_over", payload)))
+
+    engine.resign("b")
+
+    assert received == [
+        ("resign", {"color": "b"}),
+        ("game_over", {"winner": "w"}),
+    ]
+
+
+def test_resign_after_game_over_is_a_no_op():
+    engine, board = make_engine([["wR", ".", "bK"], [".", ".", "."], [".", ".", "."]])
+    engine.request_move((0, 0), (0, 2))
+    engine.wait(2 * settings.MOVE_DURATION)
+    assert engine.game_over is True
+    assert engine.winner == "w"
+
+    received = []
+    engine.events.subscribe("resign", lambda payload: received.append(payload))
+    engine.resign("w")  # the already-declared winner "resigning" changes nothing
+
+    assert engine.winner == "w"  # unchanged
+    assert received == []  # no "resign" event for a no-op
+
+
 def test_engine_publishes_game_started_on_construction():
     received = []
     board = Board([["wR", ".", "."]])

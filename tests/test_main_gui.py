@@ -100,15 +100,31 @@ def test_build_screens_network_mode_starts_on_login():
         session.close()
 
 
-def test_build_screens_network_mode_moves_to_game_once_the_bus_reports_a_login():
+def test_build_screens_network_mode_moves_to_home_once_the_bus_reports_a_login():
     # ScreenManager's own transitions= wiring is what does this - nothing
-    # in main_gui.py's render loop branches on "did login succeed".
+    # in main_gui.py's render loop branches on "did login succeed". LOGIN
+    # only authenticates - it doesn't seat a color - so it lands on HOME,
+    # not straight into GAME.
     events = EventBus()
     session = build_session("network", events, settings, server_url="ws://127.0.0.1:1")
 
     try:
         manager = build_screens(events, settings, session, "network")
-        events.publish("login", {"color": "w", "username": "alice"})
+        events.publish("login", {"username": "alice", "rating": 1200})
+
+        assert manager.current_name == "HOME"
+    finally:
+        session.close()
+
+
+def test_build_screens_network_mode_moves_to_game_once_the_bus_reports_a_match():
+    events = EventBus()
+    session = build_session("network", events, settings, server_url="ws://127.0.0.1:1")
+
+    try:
+        manager = build_screens(events, settings, session, "network")
+        events.publish("login", {"username": "alice", "rating": 1200})
+        events.publish("matched", {"color": "w"})
 
         assert manager.current_name == "GAME"
     finally:

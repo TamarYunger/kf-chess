@@ -26,6 +26,7 @@ from view.local_game_session import LocalGameSession
 from view.network_game_session import NetworkGameSession
 from view.piece_assets import load_all_piece_configs, state_duration_ms
 from view.screen_manager import ScreenManager
+from view.screens.home_screen import HomeScreen
 from view.screens.login_screen import LoginScreen
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -79,18 +80,21 @@ def build_session(mode, events, config, board_lines=None, server_url=DEFAULT_SER
 def build_screens(events, config, session, mode):
     """Wires every known screen into a ScreenManager. "local" mode (no
     server, "Play Offline") starts straight on GAME - there's no one to
-    log in to. "network" mode starts on LOGIN and only reaches GAME once
-    the server confirms a seat, via the "login" bus event LoginScreen's
-    successful submit_command eventually triggers - that transition is
+    log in to, let alone matchmake with. "network" mode starts on LOGIN:
+    a successful LOGIN moves on to HOME ("login" event) - it only
+    authenticates, it doesn't seat a color - and HOME's "Play" button
+    (server.matchmaking) only reaches GAME once the server actually finds
+    an opponent ("matched" event). Every one of these transitions is
     ScreenManager's own `transitions=` wiring, not an if/else here or in
-    run_gui's loop. HOME/ROOM_DIALOG land in a later step, registered the
-    same way.
+    run_gui's loop. ROOM_DIALOG lands in a later step, registered the same
+    way.
     """
     initial = "GAME" if mode == "local" else "LOGIN"
     manager = ScreenManager(events, initial=initial)
-    manager.register("GAME", GameScreen(config, session, board_x_offset=SIDE_PANEL_WIDTH))
+    manager.register("GAME", GameScreen(config, session, events, board_x_offset=SIDE_PANEL_WIDTH))
     if mode == "network":
-        manager.register("LOGIN", LoginScreen(session, events), transitions={"login": "GAME"})
+        manager.register("LOGIN", LoginScreen(session, events), transitions={"login": "HOME"})
+        manager.register("HOME", HomeScreen(session, events), transitions={"matched": "GAME"})
     return manager
 
 

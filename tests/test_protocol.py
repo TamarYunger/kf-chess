@@ -8,8 +8,9 @@ from rules.rule_engine import RuleEngine
 from rules.rule_registry import build_default_registry
 from game.engine import GameEngine
 from server.protocol import (
-    Command, ProtocolError, encode_error, encode_login, encode_login_rejected, encode_rejected, encode_snapshot,
-    parse_command, resolve_cells,
+    Command, ProtocolError, encode_error, encode_login, encode_login_rejected, encode_matched,
+    encode_no_match, encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected,
+    encode_snapshot, parse_command, resolve_cells,
 )
 from view.snapshot_codec import snapshot_from_json
 
@@ -126,10 +127,37 @@ def test_parse_command_login_rejects_more_than_two_arguments():
 
 
 def test_encode_login_shape():
-    assert encode_login("w", "alice") == {"type": "login", "payload": {"color": "w", "username": "alice"}}
+    assert encode_login("alice", 1200) == {"type": "login", "payload": {"username": "alice", "rating": 1200}}
 
 
 def test_encode_login_rejected_shape():
-    assert encode_login_rejected("Room is full") == {
-        "type": "login_rejected", "payload": {"message": "Room is full"},
+    assert encode_login_rejected("Invalid password") == {
+        "type": "login_rejected", "payload": {"message": "Invalid password"},
     }
+
+
+def test_parse_command_play_takes_no_arguments():
+    assert parse_command("PLAY") == Command("PLAY", ())
+
+
+def test_parse_command_play_rejects_any_argument():
+    with pytest.raises(ProtocolError):
+        parse_command("PLAY now")
+
+
+def test_encode_matched_shape():
+    assert encode_matched("b") == {"type": "matched", "payload": {"color": "b"}}
+
+
+def test_encode_no_match_shape():
+    assert encode_no_match() == {"type": "no_match", "payload": None}
+
+
+def test_encode_opponent_disconnected_shape():
+    assert encode_opponent_disconnected("w", 20) == {
+        "type": "opponent_disconnected", "payload": {"color": "w", "grace_period_seconds": 20},
+    }
+
+
+def test_encode_opponent_reconnected_shape():
+    assert encode_opponent_reconnected("w") == {"type": "opponent_reconnected", "payload": {"color": "w"}}

@@ -159,6 +159,26 @@ class GameEngine:
         self._arbiter.start_jump(self._board.get(*cell), cell)
         return MoveResult(True, Reason.OK)
 
+    def resign(self, color):
+        """Ends the game immediately in favor of whichever color `color`
+        isn't - a resignation, not a capture (see server/ws_server.py's
+        disconnect-timeout auto-resign, or a future explicit "resign"
+        button). A no-op once the game is already over, matching every
+        other command's GAME_OVER guard.
+
+        Publishes "resign" (payload: the resigning color) and then
+        "game_over" (payload: the winner) - the same "game_over" a
+        king-capture win already publishes - so anything listening for the
+        game ending (e.g. GameServer's Elo rating update) doesn't need a
+        separate case for how it ended.
+        """
+        if self._game_over:
+            return
+        self._game_over = True
+        self._winner = next(c for c in self._config.COLORS if c != color)
+        self._events.publish("resign", {"color": color})
+        self._events.publish("game_over", {"winner": self._winner})
+
     def wait(self, dt):
         self._apply_events(self._arbiter.advance_time(dt))
 

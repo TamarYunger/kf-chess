@@ -59,8 +59,15 @@ class NetworkClient:
     def stop(self):
         if self._thread is None:
             return  # start() was never called - nothing to wait for or cancel
-        if self._ready.wait(timeout=5) and self._task is not None:
-            self._loop.call_soon_threadsafe(self._task.cancel)
+        # A second stop() (or one that races the thread's own natural
+        # exit) must not try to schedule a callback on a loop that's
+        # already closed - call_soon_threadsafe raises RuntimeError for
+        # that, unlike a plain no-op on an already-cancelled task.
+        if self._ready.wait(timeout=5) and self._task is not None and self._thread.is_alive():
+            try:
+                self._loop.call_soon_threadsafe(self._task.cancel)
+            except RuntimeError:
+                pass
         self._thread.join(timeout=5)
 
     def send(self, message):

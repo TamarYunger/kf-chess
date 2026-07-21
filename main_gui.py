@@ -26,6 +26,7 @@ from view.local_game_session import LocalGameSession
 from view.network_game_session import NetworkGameSession
 from view.piece_assets import load_all_piece_configs, state_duration_ms
 from view.screen_manager import ScreenManager
+from view.screens.login_screen import LoginScreen
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 WINDOW_NAME = "KungFu Chess"
@@ -75,12 +76,21 @@ def build_session(mode, events, config, board_lines=None, server_url=DEFAULT_SER
     raise ValueError(f"Unknown mode: {mode!r} (expected 'local' or 'network')")
 
 
-def build_screens(events, config, session):
-    """Wires every known screen into a ScreenManager. Only GAME exists so
-    far - LOGIN/HOME/ROOM_DIALOG land in a later step, each registered here
-    the same way, with its own bus-driven `transitions=` mapping."""
-    manager = ScreenManager(events, initial="GAME")
+def build_screens(events, config, session, mode):
+    """Wires every known screen into a ScreenManager. "local" mode (no
+    server, "Play Offline") starts straight on GAME - there's no one to
+    log in to. "network" mode starts on LOGIN and only reaches GAME once
+    the server confirms a seat, via the "login" bus event LoginScreen's
+    successful submit_command eventually triggers - that transition is
+    ScreenManager's own `transitions=` wiring, not an if/else here or in
+    run_gui's loop. HOME/ROOM_DIALOG land in a later step, registered the
+    same way.
+    """
+    initial = "GAME" if mode == "local" else "LOGIN"
+    manager = ScreenManager(events, initial=initial)
     manager.register("GAME", GameScreen(config, session, board_x_offset=SIDE_PANEL_WIDTH))
+    if mode == "network":
+        manager.register("LOGIN", LoginScreen(session, events), transitions={"login": "GAME"})
     return manager
 
 
@@ -88,7 +98,7 @@ def run_gui(mode="local", server_url=DEFAULT_SERVER_URL, board_lines=None, confi
     config = with_synced_rest_durations(config)
     events = EventBus()
     session = build_session(mode, events, config, board_lines=board_lines, server_url=server_url)
-    manager = build_screens(events, config, session)
+    manager = build_screens(events, config, session, mode)
 
     Img.open_window(WINDOW_NAME)
     Img.set_mouse_callback(WINDOW_NAME, on_click=manager.handle_click, on_double_click=manager.handle_double_click)

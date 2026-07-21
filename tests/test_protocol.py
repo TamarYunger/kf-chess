@@ -8,7 +8,8 @@ from rules.rule_engine import RuleEngine
 from rules.rule_registry import build_default_registry
 from game.engine import GameEngine
 from server.protocol import (
-    Command, ProtocolError, encode_error, encode_rejected, encode_snapshot, parse_command, resolve_cells,
+    Command, ProtocolError, encode_error, encode_login, encode_login_rejected, encode_rejected, encode_snapshot,
+    parse_command, resolve_cells,
 )
 from view.snapshot_codec import snapshot_from_json
 
@@ -103,3 +104,27 @@ def test_encode_rejected_serializes_the_reason_as_its_plain_value():
     from rules.reasons import Reason
     message = encode_rejected(Reason.BUSY_SOURCE)
     assert message == {"type": "rejected", "payload": {"reason": "busy_source"}}
+
+
+def test_parse_command_login():
+    assert parse_command("LOGIN alice") == Command("LOGIN", ("alice",))
+
+
+def test_parse_command_login_rejects_a_missing_username():
+    with pytest.raises(ProtocolError):
+        parse_command("LOGIN")
+
+
+def test_parse_command_login_rejects_more_than_one_argument():
+    with pytest.raises(ProtocolError):
+        parse_command("LOGIN alice bob")
+
+
+def test_encode_login_shape():
+    assert encode_login("w", "alice") == {"type": "login", "payload": {"color": "w", "username": "alice"}}
+
+
+def test_encode_login_rejected_shape():
+    assert encode_login_rejected("Room is full") == {
+        "type": "login_rejected", "payload": {"message": "Room is full"},
+    }

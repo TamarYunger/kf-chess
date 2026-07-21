@@ -140,6 +140,89 @@ def test_tick_advances_the_engine_clock_and_broadcasts():
     run(scenario())
 
 
+# -- Seat assignment (fake connections) --------------------------------------
+
+
+def test_first_login_is_assigned_the_first_configured_color():
+    async def scenario():
+        engine = build_engine(["wK . .", ". . .", ". . ."], settings)
+        server = GameServer(engine)
+
+        conn = FakeConnection(incoming=["LOGIN alice"])
+        await server.handle_connection(conn)
+
+        login = json.loads(conn.sent[1])
+        assert login == {"type": "login", "payload": {"color": settings.COLORS[0], "username": "alice"}}
+
+    run(scenario())
+
+
+def test_second_login_from_a_different_connection_gets_the_second_color():
+    async def scenario():
+        engine = build_engine(["wK . .", ". . .", ". . ."], settings)
+        server = GameServer(engine)
+        server._seats[FakeConnection()] = settings.COLORS[0]  # someone already seated first
+
+        conn = FakeConnection(incoming=["LOGIN bob"])
+        await server.handle_connection(conn)
+
+        login = json.loads(conn.sent[1])
+        assert login == {"type": "login", "payload": {"color": settings.COLORS[1], "username": "bob"}}
+
+    run(scenario())
+
+
+def test_third_login_is_rejected_room_full():
+    async def scenario():
+        engine = build_engine(["wK . .", ". . .", ". . ."], settings)
+        server = GameServer(engine)
+        server._seats[FakeConnection()] = settings.COLORS[0]
+        server._seats[FakeConnection()] = settings.COLORS[1]
+
+        conn = FakeConnection(incoming=["LOGIN carol"])
+        await server.handle_connection(conn)
+
+        rejected = json.loads(conn.sent[1])
+        assert rejected == {"type": "login_rejected", "payload": {"message": "Room is full"}}
+
+    run(scenario())
+
+
+def test_relogin_from_an_already_seated_connection_returns_the_same_color():
+    async def scenario():
+        engine = build_engine(["wK . .", ". . .", ". . ."], settings)
+        server = GameServer(engine)
+
+        conn = FakeConnection(incoming=["LOGIN alice", "LOGIN alice-again"])
+        await server.handle_connection(conn)
+
+        first = json.loads(conn.sent[1])["payload"]["color"]
+        second = json.loads(conn.sent[2])["payload"]["color"]
+        # If the re-login had consumed a second seat, it would have been
+        # assigned settings.COLORS[1] instead of repeating the same color.
+        assert first == second
+
+    run(scenario())
+
+
+def test_disconnecting_frees_the_seat_for_the_next_login():
+    async def scenario():
+        engine = build_engine(["wK . .", ". . .", ". . ."], settings)
+        server = GameServer(engine)
+
+        first = FakeConnection(incoming=["LOGIN alice"])
+        await server.handle_connection(first)  # logs in, then "disconnects" (incoming exhausted)
+        assert first not in server._seats
+
+        second = FakeConnection(incoming=["LOGIN bob"])
+        await server.handle_connection(second)
+
+        login = json.loads(second.sent[1])
+        assert login["payload"]["color"] == settings.COLORS[0]  # the freed seat, not a rejection
+
+    run(scenario())
+
+
 # -- Real integration tests: actual websockets.serve + websockets.connect ---
 
 
@@ -167,6 +250,39 @@ def test_two_clients_connect_send_moves_and_receive_matching_snapshots():
                     "piece": "wR", "start": [0, 0], "end": [0, 2],
                     "arrival": updated_a["payload"]["moves"][0]["arrival"], "path": [[0, 1], [0, 2]],
                 }
+
+    asyncio.run(scenario())
+
+
+def test_three_real_clients_login_first_two_seated_third_rejected():
+    async def scenario():
+        engine = build_engine(["wK . .", ". . .", ". . ."], settings)
+        server = GameServer(engine)
+
+        async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
+            port = ws_server.sockets[0].getsockname()[1]
+            url = f"ws://127.0.0.1:{port}"
+
+            async with (
+                websockets.connect(url) as alice,
+                websockets.connect(url) as bob,
+                websockets.connect(url) as carol,
+            ):
+                await alice.recv()  # initial snapshot, one per connection
+                await bob.recv()
+                await carol.recv()
+
+                await alice.send("LOGIN alice")
+                await bob.send("LOGIN bob")
+                await carol.send("LOGIN carol")
+
+                alice_login = json.loads(await alice.recv())
+                bob_login = json.loads(await bob.recv())
+                carol_login = json.loads(await carol.recv())
+
+                assert alice_login == {"type": "login", "payload": {"color": "w", "username": "alice"}}
+                assert bob_login == {"type": "login", "payload": {"color": "b", "username": "bob"}}
+                assert carol_login == {"type": "login_rejected", "payload": {"message": "Room is full"}}
 
     asyncio.run(scenario())
 

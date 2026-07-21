@@ -8,10 +8,12 @@ without a running server.
 Client -> server (one command per text message):
     "MOVE <start-square> <end-square>"   e.g. "MOVE e2 e4"
     "JUMP <square>"                      e.g. "JUMP e2"
+    "LOGIN <username>"                   e.g. "LOGIN alice"
 Squares are algebraic notation (view.notation.square_name/parse_square) -
 letter file, then rank counting up from the bottom row - so a command
 never depends on window pixels or a particular board size beyond the
-board's own height.
+board's own height. LOGIN's argument is a plain username, not a square -
+see resolve_cells vs. Command.args directly.
 
 Server -> client (JSON-encoded):
     {"type": "snapshot", "payload": {...}}   - same shape
@@ -24,6 +26,10 @@ Server -> client (JSON-encoded):
     {"type": "error", "payload": {"message": str}}      - malformed command
     {"type": "rejected", "payload": {"reason": str}}    - legal command,
         refused by GameEngine (Reason.* from rules.reasons)
+    {"type": "login", "payload": {"color": str, "username": str}}
+        - LOGIN accepted, this connection is now seated as `color`
+    {"type": "login_rejected", "payload": {"message": str}}
+        - LOGIN refused (e.g. both seats already taken)
 """
 from __future__ import annotations
 
@@ -31,24 +37,26 @@ from dataclasses import dataclass
 
 from view.notation import parse_square
 
-_ARITY = {"MOVE": 2, "JUMP": 1}
+_ARITY = {"MOVE": 2, "JUMP": 1, "LOGIN": 1}
 
 
 class ProtocolError(Exception):
     """A client sent something that isn't a valid command - bad verb, wrong
-    number of squares, or a malformed square (e.g. "MOVE e2 e5e5")."""
+    number of arguments, or a malformed square (e.g. "MOVE e2 e5e5")."""
 
 
 @dataclass(frozen=True)
 class Command:
     verb: str
-    squares: tuple  # raw algebraic strings, not yet resolved to cells
+    args: tuple  # raw strings - algebraic squares for MOVE/JUMP, a
+    # username for LOGIN - not yet resolved/validated, see resolve_cells
 
 
 def parse_command(line):
-    """"MOVE e2 e4" -> Command("MOVE", ("e2", "e4")). Squares are left as
-    text here - turning them into (row, col) needs the board's height,
-    which this module doesn't have; see resolve_cells."""
+    """"MOVE e2 e4" -> Command("MOVE", ("e2", "e4")). Args are left as text
+    here - turning a MOVE/JUMP arg into a (row, col) needs the board's
+    height, which this module doesn't have; see resolve_cells. LOGIN's arg
+    needs no further resolution - use command.args[0] directly."""
     parts = line.split()
     if not parts:
         raise ProtocolError("Empty command")
@@ -57,20 +65,21 @@ def parse_command(line):
     if verb not in _ARITY:
         raise ProtocolError(f"Unknown command: {parts[0]!r}")
 
-    squares = tuple(parts[1:])
+    args = tuple(parts[1:])
     expected = _ARITY[verb]
-    if len(squares) != expected:
-        raise ProtocolError(f"{verb} expects {expected} square(s), got {len(squares)}")
+    if len(args) != expected:
+        raise ProtocolError(f"{verb} expects {expected} argument(s), got {len(args)}")
 
-    return Command(verb, squares)
+    return Command(verb, args)
 
 
 def resolve_cells(command, board_height):
-    """A Command's raw algebraic squares -> a tuple of (row, col) cells.
-    Kept separate from parse_command because it needs board_height, which
-    the wire format itself has no business knowing."""
+    """A MOVE/JUMP Command's raw algebraic squares -> a tuple of (row, col)
+    cells. Kept separate from parse_command because it needs board_height,
+    which the wire format itself has no business knowing. Not meaningful
+    for LOGIN - its single arg is a username, not a square."""
     try:
-        return tuple(parse_square(square, board_height) for square in command.squares)
+        return tuple(parse_square(square, board_height) for square in command.args)
     except ValueError as error:
         raise ProtocolError(str(error)) from error
 
@@ -143,3 +152,11 @@ def encode_rejected(reason):
     # plain value ("busy_source") once json.dumps'd - not str(reason),
     # which would instead give Enum's own "Reason.BUSY_SOURCE".
     return {"type": "rejected", "payload": {"reason": reason}}
+
+
+def encode_login(color, username):
+    return {"type": "login", "payload": {"color": color, "username": username}}
+
+
+def encode_login_rejected(message):
+    return {"type": "login_rejected", "payload": {"message": message}}

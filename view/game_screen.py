@@ -23,6 +23,11 @@ DISCONNECT_FONT_SCALE_1 = 0.9
 DISCONNECT_FONT_SCALE_2 = 0.7
 DISCONNECT_THICKNESS = 2
 
+ROOM_HEADER_COLOR = (0, 215, 255, 255)  # BGRA amber, matches HomeScreen/LoginScreen's title color
+ROOM_HEADER_FONT_SCALE = 0.5
+ROOM_HEADER_X = 8
+ROOM_HEADER_Y = 18
+
 
 class GameScreen(Screen):
     """The board screen: renders whatever GameSnapshot its GameSession
@@ -40,7 +45,9 @@ class GameScreen(Screen):
 
     `events` is the same bus NetworkGameSession publishes server messages
     on (harmless to subscribe to for a LocalGameSession, which never
-    publishes these - there's simply never an opponent to disconnect).
+    publishes these - there's simply never an opponent to disconnect, or
+    a room at all - both a room-id header and the viewer/seated
+    distinction below are simply inert for offline play).
     """
 
     def __init__(self, config, session, events, board_x_offset=SIDE_PANEL_WIDTH):
@@ -50,8 +57,11 @@ class GameScreen(Screen):
         self._renderer = GraphicsRenderer(config)
         self._last_snapshot = None
         self._disconnect_deadline = None  # wall-clock time.time(), or None if no countdown is active
+        self._room_id = None
+        self._role = None  # a color (seated) or "viewer"; None outside a room (e.g. local play)
         events.subscribe("opponent_disconnected", self._on_opponent_disconnected)
         events.subscribe("opponent_reconnected", self._on_opponent_reconnected)
+        events.subscribe("room", self._on_room)
 
     def render(self, canvas):
         # The one call per frame that lets the session do its own
@@ -65,15 +75,21 @@ class GameScreen(Screen):
             return
         rendered = self._renderer.render(self._last_snapshot)
         canvas.img = rendered.img
+        if self._room_id is not None:
+            self._draw_room_header(canvas)
         if self._disconnect_deadline is not None and not self._last_snapshot.game_over:
             self._draw_disconnect_overlay(canvas)
 
     def handle_click(self, x, y):
+        if self._role == "viewer":
+            return  # a viewer never submits move commands - see server/room.py's own rejection too
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
             self._session.submit_command({"type": "click", "cell": cell})
 
     def handle_double_click(self, x, y):
+        if self._role == "viewer":
+            return
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
             self._session.submit_command({"type": "jump", "cell": cell})
@@ -97,6 +113,18 @@ class GameScreen(Screen):
             CONNECTING_TEXT, (width - text_w) // 2, (height + text_h) // 2,
             CONNECTING_FONT_SCALE, CONNECTING_TEXT_COLOR, 2,
         )
+
+    # -- room-id header ---------------------------------------------------
+
+    def _on_room(self, payload):
+        self._room_id = payload["room_id"]
+        self._role = payload["role"]
+
+    def _draw_room_header(self, canvas):
+        text = f"Room: {self._room_id}"
+        if self._role == "viewer":
+            text += " (viewing)"
+        canvas.put_text(text, ROOM_HEADER_X, ROOM_HEADER_Y, ROOM_HEADER_FONT_SCALE, ROOM_HEADER_COLOR, 1)
 
     # -- opponent disconnect countdown ----------------------------------
 

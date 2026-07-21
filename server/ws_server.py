@@ -29,8 +29,10 @@ from rules.rule_engine import RuleEngine
 from rules.rule_registry import build_default_registry
 from server.db import AccountStore
 from server.elo import update_ratings
+from server.matchmaking import find_opponent
 from server.protocol import (
-    ProtocolError, encode_error, encode_login, encode_login_rejected, encode_rejected, encode_snapshot,
+    ProtocolError, encode_error, encode_login, encode_login_rejected, encode_matched, encode_no_match,
+    encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected, encode_snapshot,
     parse_command, resolve_cells,
 )
 
@@ -40,8 +42,17 @@ DEFAULT_DB_PATH = str(Path(__file__).resolve().parent / "accounts.db")
 
 # How often the server ticks GameEngine.wait() and broadcasts, even with no
 # incoming command - real-time motion (a move landing, a rest cooldown
-# expiring) has to reach clients without waiting for someone to move.
+# expiring) has to reach clients without waiting for someone to move. Also
+# the resolution at which matchmaking/disconnect timeouts are checked.
 TICK_INTERVAL_SECONDS = 0.05
+
+# How long a PLAY request waits for a compatible opponent before the
+# player gets "No opponent found" instead.
+MATCHMAKING_TIMEOUT_SECONDS = 60
+
+# How long a seated player has to reconnect (re-LOGIN with the same
+# username) after dropping connection before they're auto-resigned.
+DISCONNECT_GRACE_SECONDS = 20
 
 STANDARD_BOARD_TEXT = [
     "bR bN bB bQ bK bB bN bR",
@@ -75,27 +86,35 @@ def build_engine(board_lines, config=settings, events=None):
 
 
 class GameServer:
-    """Owns one GameEngine, every currently-connected client, and seat
-    assignment. Not itself aware of websockets.serve's lifecycle (see
-    serve_forever) - so it's testable by driving handle_connection/tick
-    directly, without a real socket.
+    """Owns one GameEngine and every currently-connected client. Not itself
+    aware of websockets.serve's lifecycle (see serve_forever) - so it's
+    testable by driving handle_connection/tick directly, without a real
+    socket.
 
-    Only `len(config.COLORS)` connections can be seated at a time (2 for
-    the default w/b config) - the first to LOGIN gets colors[0], the next
-    colors[1], and so on; anyone past that gets login_rejected instead. A
-    connection's seat is freed when it disconnects, and LOGIN is otherwise
-    open to any client at any time - there's no restriction yet tying a
-    MOVE/JUMP to the color that's actually seated for it (see the open
-    follow-up in server/protocol.py's module docstring).
+    Collaborators:
+      - `accounts` (server.db.AccountStore): LOGIN's username/password is
+        checked here, and ratings are read/written here. Defaults to an
+        in-memory store so a GameServer is usable standalone (e.g. in
+        tests) without a real database file.
+      - `events` should be the same EventBus `engine` itself publishes on
+        (see build_engine) - if given, this server listens for "game_over"
+        to update both seated players' Elo ratings (server.elo) once a
+        game actually ends; if omitted, ratings are simply never updated
+        (a valid, tested configuration for tests that don't care).
+      - server.matchmaking.find_opponent (pure logic): LOGIN only
+        authenticates - it does NOT seat a color. PLAY joins the
+        matchmaking queue and only seats a color once matched against
+        another PLAY-ing connection within rating range, or times out
+        after MATCHMAKING_TIMEOUT_SECONDS with "no_match".
 
-    `accounts` (server.db.AccountStore) is where LOGIN's username/password
-    is checked and where ratings are read/written - defaults to an
-    in-memory store so a GameServer is usable standalone (e.g. in tests)
-    without a real database file. `events` should be the same EventBus
-    `engine` itself publishes on (see build_engine) - if given, this
-    server listens for "game_over" to update both seated players' Elo
-    ratings (server.elo) once a game actually ends; if omitted, ratings are
-    simply never updated (fine for tests that don't care about that).
+    Only `len(config.COLORS)` colors can be seated at a time (2 for the
+    default w/b config). A seated player's disconnect doesn't free their
+    color outright - it starts a DISCONNECT_GRACE_SECONDS window (see
+    _resolve_disconnect_timeouts) during which the same username can
+    reclaim it by logging back in (even from a brand new connection);
+    letting the window lapse auto-resigns them via GameEngine.resign.
+    There's no restriction yet tying a MOVE/JUMP to the color that's
+    actually seated for it.
     """
 
     def __init__(self, engine, config=settings, accounts=None, events=None):
@@ -104,8 +123,16 @@ class GameServer:
         self._colors = tuple(config.COLORS)
         self._accounts = accounts if accounts is not None else AccountStore()
         self._clients = set()
-        self._seats = {}  # connection -> assigned color
-        self._players = {}  # connection -> {"username": str, "rating": int}
+        self._players = {}  # connection -> {"username", "rating"} (authenticated, connected)
+        self._queue = {}  # connection -> {"username", "rating", "queued_at"} (searching)
+        self._seats = {}  # connection -> color (currently connected AND seated)
+        # color -> {"username", "rating"}, populated once matched and kept
+        # for the lifetime of this game (even across a disconnect) - both
+        # rating updates on game_over and a reconnect's reclaim check need
+        # it after the original connection (and its self._players entry)
+        # is already gone.
+        self._seat_info = {}
+        self._disconnected = {}  # color -> monotonic deadline (grace period pending)
         self._last_tick = time.monotonic()
         if events is not None:
             events.subscribe("game_over", self._on_game_over)
@@ -123,19 +150,25 @@ class GameServer:
                 await self._handle_message(connection, raw)
         finally:
             self._clients.discard(connection)
-            self._seats.pop(connection, None)
+            self._queue.pop(connection, None)
             self._players.pop(connection, None)
+            color = self._seats.pop(connection, None)
+            if color is not None and not self._engine.game_over:
+                await self._start_disconnect_countdown(color)
 
     async def tick(self):
-        """Advances the engine's clock by real elapsed wall-clock time and
-        broadcasts - called on a fixed interval independent of any client
-        command (see serve_forever), so in-flight motion (arrivals, rest
-        cooldowns finishing) reaches clients as it happens, not only when
-        someone happens to send another move."""
+        """Advances the engine's clock by real elapsed wall-clock time,
+        resolves any matchmaking/disconnect timeouts, and broadcasts - all
+        on a fixed interval independent of any client command (see
+        serve_forever), so time-driven state (in-flight motion, a search
+        that's been waiting too long, a dropped opponent's grace period)
+        reaches clients as it happens."""
         now = time.monotonic()
         dt_ms = int((now - self._last_tick) * 1000)
         self._last_tick = now
         self._engine.wait(dt_ms)
+        self._resolve_disconnect_timeouts(now)
+        await self._resolve_matchmaking_timeouts(now)
         await self.broadcast()
 
     async def broadcast(self):
@@ -153,6 +186,9 @@ class GameServer:
 
         if command.verb == "LOGIN":
             await self._handle_login(connection, command.args[0], command.args[1])
+            return
+        if command.verb == "PLAY":
+            await self._handle_play(connection)
             return
 
         try:
@@ -172,13 +208,13 @@ class GameServer:
 
         await self.broadcast()
 
+    # -- LOGIN: authentication only, plus reclaiming a disconnected seat --
+
     async def _handle_login(self, connection, username, password):
-        # Re-login from a connection that already holds a seat just
-        # confirms the same color again, rather than re-authenticating or
-        # consuming a second seat for the same connection.
-        color = self._seats.get(connection)
-        if color is not None:
-            await self._safe_send(connection, json.dumps(encode_login(color, username)))
+        if connection in self._players:
+            # Re-login from an already-authenticated connection just
+            # confirms the same identity again.
+            await self._safe_send(connection, json.dumps(encode_login(username, self._players[connection]["rating"])))
             return
 
         ok, rating, error = self._accounts.authenticate(username, password)
@@ -186,41 +222,95 @@ class GameServer:
             await self._safe_send(connection, json.dumps(encode_login_rejected(error)))
             return
 
-        if len(self._seats) >= len(self._colors):
-            await self._safe_send(connection, json.dumps(encode_login_rejected("Room is full")))
+        self._players[connection] = {"username": username, "rating": rating}
+        await self._safe_send(connection, json.dumps(encode_login(username, rating)))
+
+        reclaimed_color = self._reclaimable_color(username)
+        if reclaimed_color is not None:
+            del self._disconnected[reclaimed_color]
+            self._seats[connection] = reclaimed_color
+            self._seat_info[reclaimed_color] = {"username": username, "rating": rating}
+            await self._notify_all(encode_opponent_reconnected(reclaimed_color))
+
+    def _reclaimable_color(self, username):
+        for color in self._disconnected:
+            if self._seat_info.get(color, {}).get("username") == username:
+                return color
+        return None
+
+    # -- PLAY / matchmaking -------------------------------------------------
+
+    async def _handle_play(self, connection):
+        player = self._players.get(connection)
+        if player is None:
+            await self._safe_send(connection, json.dumps(encode_error("Must LOGIN before PLAY")))
+            return
+        if connection in self._seats or connection in self._queue:
+            return  # already seated or already searching - PLAY is a no-op
+
+        waiting = [(conn, info["rating"]) for conn, info in self._queue.items()]
+        opponent_connection = find_opponent(player["rating"], waiting)
+        if opponent_connection is None:
+            self._queue[connection] = {
+                "username": player["username"], "rating": player["rating"], "queued_at": time.monotonic(),
+            }
             return
 
-        color = self._colors[len(self._seats)]
-        self._seats[connection] = color
-        self._players[connection] = {"username": username, "rating": rating}
-        await self._safe_send(connection, json.dumps(encode_login(color, username)))
+        opponent = self._queue.pop(opponent_connection)
+        color_mine, color_theirs = self._colors[0], self._colors[1]
+        self._seats[connection] = color_mine
+        self._seats[opponent_connection] = color_theirs
+        self._seat_info[color_mine] = {"username": player["username"], "rating": player["rating"]}
+        self._seat_info[color_theirs] = {"username": opponent["username"], "rating": opponent["rating"]}
+        await self._safe_send(connection, json.dumps(encode_matched(color_mine)))
+        await self._safe_send(opponent_connection, json.dumps(encode_matched(color_theirs)))
+        await self.broadcast()  # both should see the board immediately, not wait for the next tick
+
+    async def _resolve_matchmaking_timeouts(self, now):
+        for connection, info in list(self._queue.items()):
+            if now - info["queued_at"] >= MATCHMAKING_TIMEOUT_SECONDS:
+                del self._queue[connection]
+                await self._safe_send(connection, json.dumps(encode_no_match()))
+
+    # -- Disconnect grace period / auto-resign ------------------------------
+
+    async def _start_disconnect_countdown(self, color):
+        self._disconnected[color] = time.monotonic() + DISCONNECT_GRACE_SECONDS
+        await self._notify_all(encode_opponent_disconnected(color, DISCONNECT_GRACE_SECONDS))
+
+    def _resolve_disconnect_timeouts(self, now):
+        for color, deadline in list(self._disconnected.items()):
+            if now >= deadline:
+                del self._disconnected[color]
+                self._engine.resign(color)  # publishes "resign" then "game_over" - see _on_game_over
 
     def _on_game_over(self, payload):
         """Updates both seated players' Elo ratings once GameEngine reports
         the game ended - a plain (synchronous) EventBus subscriber, not a
-        coroutine, since EventBus.publish calls its handlers directly.
-        A no-op if either seat was never actually logged in (nothing to
-        rate) or config.COLORS isn't exactly the two-player case Elo
-        assumes.
+        coroutine, since EventBus.publish calls its handlers directly (this
+        runs synchronously even when triggered from inside
+        _resolve_disconnect_timeouts's own call to engine.resign).
+        A no-op if either color's info isn't known (nothing to rate) or
+        config.COLORS isn't exactly the two-player case Elo assumes.
         """
         if len(self._colors) != 2:
             return
-        player_a = self._player_for_color(self._colors[0])
-        player_b = self._player_for_color(self._colors[1])
-        if player_a is None or player_b is None:
+        info_a = self._seat_info.get(self._colors[0])
+        info_b = self._seat_info.get(self._colors[1])
+        if info_a is None or info_b is None:
             return
 
         score_a = 1.0 if payload.get("winner") == self._colors[0] else 0.0
-        new_a, new_b = update_ratings(player_a["rating"], player_b["rating"], score_a)
-        player_a["rating"], player_b["rating"] = new_a, new_b
-        self._accounts.update_rating(player_a["username"], new_a)
-        self._accounts.update_rating(player_b["username"], new_b)
+        new_a, new_b = update_ratings(info_a["rating"], info_b["rating"], score_a)
+        info_a["rating"], info_b["rating"] = new_a, new_b
+        self._accounts.update_rating(info_a["username"], new_a)
+        self._accounts.update_rating(info_b["username"], new_b)
 
-    def _player_for_color(self, color):
-        for connection, seat_color in self._seats.items():
-            if seat_color == color:
-                return self._players.get(connection)
-        return None
+    async def _notify_all(self, message_dict):
+        if not self._clients:
+            return
+        message = json.dumps(message_dict)
+        await asyncio.gather(*(self._safe_send(c, message) for c in list(self._clients)))
 
     async def _safe_send(self, connection, message):
         # A client can disconnect between being read from self._clients and

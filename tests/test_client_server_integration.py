@@ -59,7 +59,7 @@ def test_a_real_gui_click_reaches_the_real_server_and_moves_a_piece():
             port = ws_server.sockets[0].getsockname()[1]
             events = EventBus()
             session = NetworkGameSession(f"ws://127.0.0.1:{port}", events)
-            screen = GameScreen(settings, session, board_x_offset=SIDE_PANEL_WIDTH)
+            screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
             canvas = Img.create(1, 1)
             tick_task = asyncio.create_task(_tick_loop(server))
             try:
@@ -102,8 +102,8 @@ def test_two_real_clients_playing_through_the_full_stack_see_the_same_state():
             events_a, events_b = EventBus(), EventBus()
             session_a = NetworkGameSession(url, events_a)
             session_b = NetworkGameSession(url, events_b)
-            screen_a = GameScreen(settings, session_a, board_x_offset=SIDE_PANEL_WIDTH)
-            screen_b = GameScreen(settings, session_b, board_x_offset=SIDE_PANEL_WIDTH)
+            screen_a = GameScreen(settings, session_a, events_a, board_x_offset=SIDE_PANEL_WIDTH)
+            screen_b = GameScreen(settings, session_b, events_b, board_x_offset=SIDE_PANEL_WIDTH)
             canvas_a, canvas_b = Img.create(1, 1), Img.create(1, 1)
             tick_task = asyncio.create_task(_tick_loop(server))
             try:
@@ -183,12 +183,12 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
                 login_a.handle_click(BUTTON_X + BUTTON_WIDTH // 2, BUTTON_Y + BUTTON_HEIGHT // 2)
 
                 assert await _wait_until(lambda: (session_a.latest_snapshot() or True) and login_seen)
-                assert login_seen[0] == {"color": "w", "username": "alice"}
+                assert login_seen[0] == {"username": "alice", "rating": 1200}
                 assert login_a._error_message is None
 
-                # bob logs in fresh (no pre-existing account) as black,
-                # straight through the wire protocol - LoginScreen's own
-                # send path is already covered by the alice half above.
+                # bob logs in fresh (no pre-existing account), straight
+                # through the wire protocol - LoginScreen's own send path
+                # is already covered by the alice half above.
                 events_b = EventBus()
                 session_b = NetworkGameSession(url, events_b)
                 bob_login_seen = []
@@ -200,25 +200,116 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
                 await _wait_until(lambda: session_b.latest_snapshot() is not None)
                 session_b.submit_command("LOGIN bob newpassword")
                 assert await _wait_until(lambda: (session_b.latest_snapshot() or True) and bob_login_seen)
-                assert bob_login_seen[0] == {"color": "b", "username": "bob"}
+                assert bob_login_seen[0] == {"username": "bob", "rating": 1200}
 
                 assert accounts.get_rating("alice") == 1200
                 assert accounts.get_rating("bob") == 1200
 
-                # White's rook captures black's king - game over.
+                # LOGIN alone seats nobody - PLAY (matchmaking, compatible
+                # ratings) is what does that.
+                alice_matched, bob_matched = [], []
+                events_a.subscribe("matched", lambda payload: alice_matched.append(payload))
+                events_b.subscribe("matched", lambda payload: bob_matched.append(payload))
+                session_a.submit_command("PLAY")
+                session_b.submit_command("PLAY")
+                assert await _wait_until(lambda: (session_a.latest_snapshot() or True) and alice_matched)
+                assert await _wait_until(lambda: (session_b.latest_snapshot() or True) and bob_matched)
+                alice_color = alice_matched[0]["color"]
+
+                # Whichever of the two ended up seated "w" captures the
+                # other's king with its rook - an immediate game over
+                # (KingCaptureWinCondition).
                 engine.request_move((0, 0), (2, 0))
 
                 def game_finished_and_rated():
                     return engine.game_over and accounts.get_rating("alice") != 1200
 
                 assert await _wait_until(game_finished_and_rated, timeout=8.0)
-                assert accounts.get_rating("alice") > 1200  # winner
-                assert accounts.get_rating("bob") < 1200  # loser
+                if alice_color == engine.winner:
+                    assert accounts.get_rating("alice") > 1200  # alice won
+                    assert accounts.get_rating("bob") < 1200
+                else:
+                    assert accounts.get_rating("bob") > 1200  # bob won
+                    assert accounts.get_rating("alice") < 1200
             finally:
                 session_a.close()
                 if session_b is not None:
                     session_b.close()
                 tick_task.cancel()
                 accounts.close()
+
+    asyncio.run(scenario())
+
+
+def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
+    # The other half of the full stack this file already covers: two real
+    # clients LOGIN and PLAY into a match (server.matchmaking), one of them
+    # actually closes its socket (not a hand-crafted "opponent_disconnected"
+    # event), and the survivor's real GameScreen picks up the countdown
+    # overlay from that real disconnect. The 20s grace period itself is
+    # sped up (poking server._disconnected's deadline) rather than the test
+    # actually sleeping through it - the auto-resign/rating-update timing
+    # itself is already covered by tests/test_ws_server.py's fake-connection
+    # tests; this test's job is the real-socket wiring around it.
+    async def scenario():
+        events_bus = EventBus()
+        engine = build_engine(["wK . .", ". . .", "bK . ."], settings, events=events_bus)
+        server = GameServer(engine, events=events_bus)
+
+        async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
+            port = ws_server.sockets[0].getsockname()[1]
+            url = f"ws://127.0.0.1:{port}"
+            tick_task = asyncio.create_task(_tick_loop(server))
+            events_a, events_b = EventBus(), EventBus()
+            session_a = NetworkGameSession(url, events_a)
+            session_b = NetworkGameSession(url, events_b)
+            screen_a = GameScreen(settings, session_a, events_a, board_x_offset=SIDE_PANEL_WIDTH)
+            screen_b = GameScreen(settings, session_b, events_b, board_x_offset=SIDE_PANEL_WIDTH)
+            canvas_a, canvas_b = Img.create(1, 1), Img.create(1, 1)
+            try:
+                await _wait_for_a_snapshot(screen_a, canvas_a)
+                await _wait_for_a_snapshot(screen_b, canvas_b)
+
+                login_a, login_b = [], []
+                events_a.subscribe("login", lambda p: login_a.append(p))
+                events_b.subscribe("login", lambda p: login_b.append(p))
+                session_a.submit_command("LOGIN alice pw1")
+                session_b.submit_command("LOGIN bob pw2")
+                assert await _wait_until(lambda: (session_a.latest_snapshot() or True) and login_a)
+                assert await _wait_until(lambda: (session_b.latest_snapshot() or True) and login_b)
+
+                matched_a, matched_b = [], []
+                events_a.subscribe("matched", lambda p: matched_a.append(p))
+                events_b.subscribe("matched", lambda p: matched_b.append(p))
+                session_a.submit_command("PLAY")
+                session_b.submit_command("PLAY")
+                assert await _wait_until(lambda: (session_a.latest_snapshot() or True) and matched_a)
+                assert await _wait_until(lambda: (session_b.latest_snapshot() or True) and matched_b)
+                alice_color = matched_a[0]["color"]
+                bob_color = matched_b[0]["color"]
+
+                # Bob's client actually drops the connection.
+                session_b.close()
+
+                def alice_sees_the_countdown():
+                    screen_a.render(canvas_a)
+                    return screen_a._disconnect_deadline is not None
+
+                assert await _wait_until(alice_sees_the_countdown)
+                assert bob_color in server._disconnected
+
+                # Speed the grace period up instead of sleeping 20s.
+                server._disconnected[bob_color] = time.monotonic() - 1
+
+                def alice_sees_game_over():
+                    screen_a.render(canvas_a)
+                    return screen_a._last_snapshot.game_over
+
+                assert await _wait_until(alice_sees_game_over)
+                assert engine.winner == alice_color
+            finally:
+                session_a.close()
+                session_b.close()
+                tick_task.cancel()
 
     asyncio.run(scenario())

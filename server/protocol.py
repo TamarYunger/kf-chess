@@ -9,13 +9,18 @@ Client -> server (one command per text message):
     "MOVE <start-square> <end-square>"   e.g. "MOVE e2 e4"
     "JUMP <square>"                      e.g. "JUMP e2"
     "LOGIN <username> <password>"        e.g. "LOGIN alice hunter2"
+    "PLAY"                                - join the matchmaking queue
 Squares are algebraic notation (view.notation.square_name/parse_square) -
 letter file, then rank counting up from the bottom row - so a command
 never depends on window pixels or a particular board size beyond the
 board's own height. LOGIN's arguments are a plain username/password, not
 squares - see resolve_cells vs. Command.args directly. A username seen
 for the first time is registered with that password (server.db); an
-existing one is authenticated against it.
+existing one is authenticated against it. LOGIN only authenticates -
+it does NOT seat a color; PLAY (matched against another PLAY-ing
+connection within server.matchmaking's rating range) is what does that,
+so a player can be logged in (browsing HOME) without occupying a game
+seat.
 
 Server -> client (JSON-encoded):
     {"type": "snapshot", "payload": {...}}   - same shape
@@ -28,10 +33,22 @@ Server -> client (JSON-encoded):
     {"type": "error", "payload": {"message": str}}      - malformed command
     {"type": "rejected", "payload": {"reason": str}}    - legal command,
         refused by GameEngine (Reason.* from rules.reasons)
-    {"type": "login", "payload": {"color": str, "username": str}}
-        - LOGIN accepted, this connection is now seated as `color`
+    {"type": "login", "payload": {"username": str, "rating": int}}
+        - LOGIN accepted; no color yet - see PLAY/matched
     {"type": "login_rejected", "payload": {"message": str}}
-        - LOGIN refused (e.g. both seats already taken)
+        - LOGIN refused (wrong password)
+    {"type": "matched", "payload": {"color": str}}
+        - PLAY found a compatible opponent; this connection is now seated
+    {"type": "no_match", "payload": null}
+        - PLAY timed out (server.ws_server.MATCHMAKING_TIMEOUT_SECONDS)
+          with no compatible opponent found
+    {"type": "opponent_disconnected", "payload": {"color": str, "grace_period_seconds": int}}
+        - the player seated as `color` dropped connection; they have
+          `grace_period_seconds` to reconnect (re-LOGIN with the same
+          username) before server.ws_server auto-resigns them
+    {"type": "opponent_reconnected", "payload": {"color": str}}
+        - `color` reconnected within the grace period; the countdown is
+          cancelled
 """
 from __future__ import annotations
 
@@ -39,7 +56,7 @@ from dataclasses import dataclass
 
 from view.notation import parse_square
 
-_ARITY = {"MOVE": 2, "JUMP": 1, "LOGIN": 2}
+_ARITY = {"MOVE": 2, "JUMP": 1, "LOGIN": 2, "PLAY": 0}
 
 
 class ProtocolError(Exception):
@@ -157,9 +174,28 @@ def encode_rejected(reason):
     return {"type": "rejected", "payload": {"reason": reason}}
 
 
-def encode_login(color, username):
-    return {"type": "login", "payload": {"color": color, "username": username}}
+def encode_login(username, rating):
+    return {"type": "login", "payload": {"username": username, "rating": rating}}
 
 
 def encode_login_rejected(message):
     return {"type": "login_rejected", "payload": {"message": message}}
+
+
+def encode_matched(color):
+    return {"type": "matched", "payload": {"color": color}}
+
+
+def encode_no_match():
+    return {"type": "no_match", "payload": None}
+
+
+def encode_opponent_disconnected(color, grace_period_seconds):
+    return {
+        "type": "opponent_disconnected",
+        "payload": {"color": color, "grace_period_seconds": grace_period_seconds},
+    }
+
+
+def encode_opponent_reconnected(color):
+    return {"type": "opponent_reconnected", "payload": {"color": color}}

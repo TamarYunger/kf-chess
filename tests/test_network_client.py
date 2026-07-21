@@ -160,6 +160,19 @@ def test_stop_called_immediately_after_start_does_not_block():
     assert elapsed < 2.0
 
 
+def test_stop_twice_does_not_raise():
+    # Regression: a second stop() (e.g. a caller that both explicitly
+    # closes a session and then closes it again in a `finally`) used to
+    # try scheduling a callback on the background loop after it had
+    # already closed itself, raising "RuntimeError: Event loop is closed"
+    # instead of being a harmless no-op.
+    client = NetworkClient("ws://127.0.0.1:1", close_timeout=0.2, open_timeout=1, reconnect_delay=0.1)
+    client.start()
+
+    client.stop()
+    client.stop()  # must not raise
+
+
 def test_stop_joins_the_background_thread():
     async def scenario():
         async def handler(connection):

@@ -175,6 +175,41 @@ def test_game_over_snapshot_suppresses_the_disconnect_overlay():
     screen.render(canvas)  # must not raise, and the countdown must not be drawn
 
 
+def test_resign_event_records_the_resigning_color():
+    events = EventBus()
+    screen = GameScreen(settings, FakeSession(snapshot=None), events)
+
+    events.publish("resign", {"color": "b"})
+
+    assert screen._resigned_color == "b"
+
+
+def test_resign_caption_renders_without_raising_once_the_game_is_over():
+    events = EventBus()
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json(game_over=True, winner="w")))
+    screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
+    events.publish("resign", {"color": "b"})
+    canvas = Img.create(1, 1)
+
+    screen.render(canvas)  # must not raise with the resign caption active
+
+
+def test_resign_caption_is_not_drawn_before_the_snapshot_itself_reports_game_over():
+    # The disconnect grace period's own countdown overlay is what shows
+    # while a resign is still pending (see test_disconnect_overlay_renders_
+    # without_raising) - the "resign" event can arrive before the snapshot
+    # that reflects it (see server/room.py's own ordering: "resign" is
+    # queued right before "game_over"), so the caption itself waits for
+    # the snapshot to catch up instead of assuming payload order.
+    events = EventBus()
+    session = FakeSession(snapshot=snapshot_from_json(minimal_json(game_over=False)))
+    screen = GameScreen(settings, session, events, board_x_offset=SIDE_PANEL_WIDTH)
+    events.publish("resign", {"color": "b"})
+    canvas = Img.create(1, 1)
+
+    screen.render(canvas)  # must not raise while the snapshot still lags behind
+
+
 def test_waiting_for_opponent_event_blocks_clicks_and_renders_without_raising():
     events = EventBus()
     session = FakeSession(snapshot=snapshot_from_json(minimal_json()))

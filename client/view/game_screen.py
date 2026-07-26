@@ -3,9 +3,10 @@ from __future__ import annotations
 import time
 
 from bus.event_types import (
-    CLICK, JUMP, OPPONENT_DISCONNECTED, OPPONENT_RECONNECTED, ROOM, ROOM_STARTED, WAITING_FOR_OPPONENT,
+    CLICK, JUMP, OPPONENT_DISCONNECTED, OPPONENT_RECONNECTED, RESIGN, ROOM, ROOM_STARTED, VIEWER,
+    WAITING_FOR_OPPONENT,
 )
-from client.view.graphics_renderer import GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GAP, GAME_OVER_TEXT_COLOR
+from client.view.graphics_renderer import COLOR_NAMES, GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GAP, GAME_OVER_TEXT_COLOR
 from client.view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
 from client.view.img import Img
 from client.view.screen_manager import Screen
@@ -35,6 +36,11 @@ ROOM_HEADER_FONT_SCALE = 0.5
 ROOM_HEADER_X = 8
 ROOM_HEADER_Y = 18
 
+RESIGN_CAPTION_COLOR = (200, 200, 200, 255)  # BGRA light gray, secondary to the amber room header
+RESIGN_CAPTION_FONT_SCALE = 0.5
+RESIGN_CAPTION_X = 8
+RESIGN_CAPTION_Y = 36  # one line below ROOM_HEADER_Y, same left margin
+
 
 class GameScreen(Screen):
     """The board screen: renders whatever GameSnapshot its GameSession
@@ -51,7 +57,14 @@ class GameScreen(Screen):
     when relevant (see "opponent_disconnected"/"opponent_reconnected"
     below) - both styled after GraphicsRenderer's own game-over banner,
     the same pattern view/screens/home_screen.py's "Searching..." overlay
-    reuses.
+    reuses. A "resign" caption (see server/protocol.py's own docstring:
+    broadcast right before "game_over" on an auto-resign, never for a
+    capture) is drawn as a small caption under the room header instead of
+    folded into GraphicsRenderer's own centered banner - that banner is
+    snapshot-only and already dims+centers "GAME OVER"/"X WINS" without
+    knowing why the game ended; duplicating its layout here to add a third
+    line would mean re-deriving its exact vertical offsets from outside
+    the class that owns them.
 
     `events` is the same bus NetworkGameSession publishes server messages
     on (harmless to subscribe to for a LocalGameSession, which never
@@ -70,11 +83,13 @@ class GameScreen(Screen):
         self._room_id = None
         self._role = None  # a color (seated) or "viewer"; None outside a room (e.g. local play)
         self._waiting_for_opponent = False  # a fresh ROOM CREATE's creator, alone until someone joins
+        self._resigned_color = None  # the color whose disconnect grace period expired, or None
         events.subscribe(OPPONENT_DISCONNECTED, self._on_opponent_disconnected)
         events.subscribe(OPPONENT_RECONNECTED, self._on_opponent_reconnected)
         events.subscribe(ROOM, self._on_room)
         events.subscribe(WAITING_FOR_OPPONENT, self._on_waiting_for_opponent)
         events.subscribe(ROOM_STARTED, self._on_room_started)
+        events.subscribe(RESIGN, self._on_resign)
 
     def render(self, canvas):
         # A pure read - view/app_loop.py's run_app is what calls
@@ -91,20 +106,22 @@ class GameScreen(Screen):
         canvas.img = rendered.img
         if self._room_id is not None:
             self._draw_room_header(canvas)
+        if self._resigned_color is not None and self._last_snapshot.game_over:
+            self._draw_resign_caption(canvas)
         if self._waiting_for_opponent:
             self._draw_waiting_overlay(canvas)
         elif self._disconnect_deadline is not None and not self._last_snapshot.game_over:
             self._draw_disconnect_overlay(canvas)
 
     def handle_click(self, x, y):
-        if self._role == "viewer" or self._waiting_for_opponent:
+        if self._role == VIEWER or self._waiting_for_opponent:
             return  # nothing to move yet - see server/room.py's own rejection too
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
             self._session.submit_command({"type": CLICK, "cell": cell})
 
     def handle_double_click(self, x, y):
-        if self._role == "viewer" or self._waiting_for_opponent:
+        if self._role == VIEWER or self._waiting_for_opponent:
             return
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
@@ -138,9 +155,21 @@ class GameScreen(Screen):
 
     def _draw_room_header(self, canvas):
         text = f"Room: {self._room_id}"
-        if self._role == "viewer":
+        if self._role == VIEWER:
             text += " (viewing)"
         canvas.put_text(text, ROOM_HEADER_X, ROOM_HEADER_Y, ROOM_HEADER_FONT_SCALE, ROOM_HEADER_COLOR, 1)
+
+    # -- auto-resign caption ----------------------------------------------
+
+    def _on_resign(self, payload):
+        self._resigned_color = payload["color"]
+
+    def _draw_resign_caption(self, canvas):
+        name = COLOR_NAMES.get(self._resigned_color, self._resigned_color.upper())
+        canvas.put_text(
+            f"{name} RESIGNED", RESIGN_CAPTION_X, RESIGN_CAPTION_Y,
+            RESIGN_CAPTION_FONT_SCALE, RESIGN_CAPTION_COLOR, 1,
+        )
 
     # -- waiting for a second player to join a fresh room ----------------
 

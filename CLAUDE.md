@@ -81,9 +81,11 @@ If asked to explain the codebase file-by-file again, or to refresh that
 artifact after a significant change, republish to the **same URL** by
 passing it as `url` to the Artifact tool (see the artifact-design skill) —
 don't mint a new one unless the user asks for a fresh doc. It now covers
-five full sequence-diagram flows (move round-trip, LOGIN, PLAY/matchmaking,
-ROOM CREATE/JOIN incl. a viewer, disconnect/reconnect + auto-resign) plus
-every file's responsibility. It does not cover the offline (`main_gui.py`)
-or text-mode (`main.py`) startup traces in the same depth as
-`main_online.py`, and doesn't cover the test suite itself — extend it
-there if asked for full coverage of those too.
+full startup + call-flow traces for **all three entry points**
+(`main_online.py`'s move round-trip, LOGIN, PLAY/matchmaking, ROOM
+CREATE/JOIN incl. a viewer, disconnect/reconnect + auto-resign;
+`main_gui.py`'s offline startup + in-process click round-trip; `main.py`'s
+text-mode startup + command dispatch), plus every file's responsibility
+including `bus/event_types.py` and `server/room.py`'s `_call_engine`. It
+doesn't cover the test suite itself — extend it there if asked for full
+coverage of that too.

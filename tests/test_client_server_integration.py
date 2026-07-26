@@ -319,7 +319,7 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
                 assert accounts.get_rating("bob") == 1200
 
                 room = await _create_room(events_a, session_a)
-                bob_room = await _join_room(events_b, session_b, room["room_id"])
+                await _join_room(events_b, session_b, room["room_id"])
                 alice_color = room["role"]
 
                 # Whichever of the two ended up seated "w" captures the

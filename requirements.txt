@@ -1,2 +1,2 @@
-opencv-python
-websockets
+opencv-python==5.0.0.93
+websockets==16.1.1

@@ -437,7 +437,7 @@ def test_game_over_updates_both_ratings_via_the_shared_events_bus():
         alice = FakeConnection()
         bob = FakeConnection()
         role_alice = room.seat_or_view(alice, "alice", 1200)
-        role_bob = room.seat_or_view(bob, "bob", 1200)
+        room.seat_or_view(bob, "bob", 1200)
         assert accounts.get_rating("alice") == 1200
         assert accounts.get_rating("bob") == 1200
 

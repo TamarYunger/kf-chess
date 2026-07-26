@@ -1,0 +1,5 @@
+# Only needed to run the test suite (pytest tests/) and coverage report
+# (.coveragerc) - not needed to play the game itself, see requirements.txt.
+-r requirements.txt
+pytest==9.1.1
+coverage==7.15.2

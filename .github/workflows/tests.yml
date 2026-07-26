@@ -1,0 +1,27 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    # windows-latest, not ubuntu: this project is Windows-only today (see
+    # CLAUDE.md - client/view/sound.py's winsound, client/view/img.py's cv2
+    # window) - an ubuntu runner would need extra system libraries just to
+    # import opencv-python, for a platform the game doesn't actually run on.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        run: |
+          coverage run -m pytest
+          coverage report --fail-under=100

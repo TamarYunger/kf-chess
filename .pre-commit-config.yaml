@@ -1,0 +1,24 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # assets/ ships pre-made sprite/config files, not hand-edited source -
+      # excluded so this doesn't rewrite trailing newlines across ~100
+      # untouched asset files on the first run.
+      - id: trailing-whitespace
+        exclude: ^assets/
+      - id: end-of-file-fixer
+        exclude: ^assets/
+      - id: check-merge-conflict
+      - id: check-added-large-files
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff
+        # E9/F only (syntax errors + pyflakes: unused imports/names, undefined
+        # names) - real bugs, not style opinions. Ruff's fuller default rule
+        # set (plus anything stricter) flags ~250 pre-existing, harmless
+        # findings across this codebase (mostly RUF059 on intentional tuple
+        # unpacking) - not worth blocking every future commit over.
+        args: [--select, "E9,F"]

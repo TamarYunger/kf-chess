@@ -1,5 +1,3 @@
-import pytest
-
 from board.board import Board
 from rules.movement_strategy import MoveContext
 from rules.piece_rules import (

@@ -1,11 +1,12 @@
 import pytest
 
-from view.piece_assets import StateConfig
-from view.animation import (
+from client.view.piece_assets import StateConfig
+from client.view.animation import (
     resolve_state_chain,
     frame_index_for,
     interpolate_position,
     compute_piece_views,
+    rest_fraction_remaining,
 )
 from game.snapshot import GameSnapshot
 from realtime.models import Move, Jump, Arrival
@@ -69,6 +70,13 @@ def test_frame_index_wraps_for_looping_state():
 def test_frame_index_clamps_for_non_looping_state_past_its_duration():
     # jump: 8fps, 5 frames -> duration 625ms; way past that
     assert frame_index_for(JUMP, 10_000) == 4
+
+
+def test_frame_index_is_zero_for_a_state_with_no_frames():
+    # A state whose sprite data has no frames at all (frame_count <= 0) has
+    # nothing to index into - always frame 0, regardless of elapsed time.
+    empty = StateConfig(fps=6, is_loop=True, next_state="idle", frame_count=0)
+    assert frame_index_for(empty, 500) == 0
 
 
 def test_interpolate_position_endpoints_and_midpoint():
@@ -135,6 +143,12 @@ def test_compute_piece_views_jump_lifts_at_midair_and_lands_flat():
     )
     views = compute_piece_views(landing, _piece_configs(), settings)
     assert views[0].y == pytest.approx(settings.CELL_SIZE, abs=1)
+
+
+def test_rest_fraction_remaining_is_zero_when_there_is_no_rest_duration():
+    # A zero/falsy rest_duration_ms means the config has nothing to cool
+    # down from at all - never partial, always fully expired.
+    assert rest_fraction_remaining(0, 0) == 0.0
 
 
 def test_jump_height_offset_never_pushes_a_top_row_piece_above_the_canvas():

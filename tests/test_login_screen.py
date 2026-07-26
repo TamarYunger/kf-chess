@@ -1,6 +1,6 @@
 from bus.event_bus import EventBus
-from view.img import Img
-from view.screens.login_screen import BUTTON_HEIGHT, BUTTON_WIDTH, BUTTON_X, BUTTON_Y, LoginScreen
+from client.view.img import Img
+from client.view.screens.login_screen import BUTTON_HEIGHT, BUTTON_WIDTH, BUTTON_X, BUTTON_Y, LoginScreen
 
 
 class FakeSession:

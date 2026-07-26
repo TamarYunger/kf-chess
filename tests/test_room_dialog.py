@@ -1,5 +1,5 @@
-from view.img import Img
-from view.screens.room_dialog import (
+from client.view.img import Img
+from client.view.screens.room_dialog import (
     BUTTON_HEIGHT, BUTTON_WIDTH, BUTTON_Y, CANCEL_BUTTON_X, CREATE_BUTTON_X, JOIN_BUTTON_X, RoomDialog,
 )
 

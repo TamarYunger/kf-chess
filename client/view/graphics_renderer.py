@@ -1,12 +1,12 @@
 from pathlib import Path
 
+from board.notation import move_notation
 from rules.reasons import Reason
-from view.img import Img
-from view.piece_assets import load_all_piece_configs, sprite_path
-from view.animation import compute_piece_views
-from view.notation import move_notation
+from client.view.animation import compute_piece_views
+from client.view.img import Img
+from client.view.piece_assets import load_all_piece_configs, sprite_path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 SELECTION_COLOR = (0, 255, 255, 255)  # BGRA yellow
 SELECTION_THICKNESS = 4

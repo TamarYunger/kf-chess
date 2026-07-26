@@ -8,11 +8,16 @@ without a running server.
 Client -> server (one command per text message):
     "MOVE <start-square> <end-square>"   e.g. "MOVE e2 e4"
     "JUMP <square>"                      e.g. "JUMP e2"
+    "SELECT <square>"                    - a read-only query: "if I moved
+                                          this piece, where could it go
+                                          right now" (see legal_destinations
+                                          below) - not a move itself, so it
+                                          is never rejected/logged as one
     "LOGIN <username> <password>"        e.g. "LOGIN alice hunter2"
     "PLAY"                                - join the matchmaking queue
     "ROOM CREATE"                         - create a new room, seated first
     "ROOM JOIN <room-id>"                 - join an existing room
-Squares are algebraic notation (view.notation.square_name/parse_square) -
+Squares are algebraic notation (board.notation.square_name/parse_square) -
 letter file, then rank counting up from the bottom row - so a command
 never depends on window pixels or a particular board size beyond the
 board's own height. LOGIN's arguments are a plain username/password, not
@@ -29,7 +34,7 @@ joiner becomes a viewer instead of a third seat.
 
 Server -> client (JSON-encoded):
     {"type": "snapshot", "payload": {...}}   - same shape
-        view.snapshot_codec.snapshot_from_json expects, so the existing
+        session.snapshot_codec.snapshot_from_json expects, so the existing
         GUI client can decode a server snapshot unchanged. Sent to every
         connection in a room after any change (a move accepted, a motion
         landing, a periodic tick - see ws_server.py) - seated players and
@@ -59,14 +64,32 @@ Server -> client (JSON-encoded):
     {"type": "opponent_reconnected", "payload": {"color": str}}
         - `color` reconnected within the grace period; the countdown is
           cancelled
+    {"type": "legal_destinations", "payload": {"start": [row, col], "destinations": [[row, col], ...]}}
+        - reply to that connection's own SELECT, using the exact same
+          GameEngine.legal_destinations the engine itself enforces on the
+          following MOVE - never computed twice with different rules.
+          `destinations` is empty if `start` isn't that connection's own
+          piece (an empty cell, the opponent's, or a viewer's SELECT at all)
+    {"type": "arrival", "payload": {"piece": str, "destination": [row, col], "captured": str | None}}
+        - broadcast the instant a move actually lands (mirrors GameEngine's
+          own "arrival" bus event, JSON-shaped for the wire) - purely so a
+          client can react exactly once per landing (e.g. view.sound's move
+          vs capture sound) without diffing consecutive snapshots itself.
+          Never sent for a jump (see RealTimeArbiter.resolve/_resolve_jumps
+          - a jump never publishes "arrival" either, on the server side)
+    {"type": "game_over", "payload": {"winner": str | None}}
+        - broadcast the instant the game actually ends (capture or resign);
+          also already reflected in every subsequent snapshot's own
+          game_over/winner fields, but this is the one-time edge a reactive
+          client (again, view.sound) needs instead of polling those
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from view.notation import parse_square
+from board.notation import parse_square
 
-_ARITY = {"MOVE": 2, "JUMP": 1, "LOGIN": 2, "PLAY": 0}
+_ARITY = {"MOVE": 2, "JUMP": 1, "SELECT": 1, "LOGIN": 2, "PLAY": 0}
 _ROOM_SUBCOMMANDS = {"CREATE": 0, "JOIN": 1}
 
 
@@ -141,7 +164,7 @@ def resolve_cells(command, board_height):
 
 def encode_snapshot(engine):
     """The {"type": "snapshot", ...} message for the given engine's current
-    state - the same JSON shape view.snapshot_codec.snapshot_from_json
+    state - the same JSON shape session.snapshot_codec.snapshot_from_json
     expects. Includes the arbiter's real-time motion state (moves/jumps/
     recent_arrivals) - unlike a headless-only protocol, this project's GUI
     client needs it to animate in-flight pieces (see view/animation.py).
@@ -236,6 +259,13 @@ def encode_opponent_reconnected(color):
     return {"type": "opponent_reconnected", "payload": {"color": color}}
 
 
+def encode_legal_destinations(start, destinations):
+    return {
+        "type": "legal_destinations",
+        "payload": {"start": list(start), "destinations": [list(cell) for cell in sorted(destinations)]},
+    }
+
+
 def encode_waiting_for_opponent():
     # Sent once, right after a ROOM CREATE, only to the creator, and only
     # if no one else is seated yet - PLAY's matchmaking always seats both
@@ -248,3 +278,14 @@ def encode_room_started():
     # first time - clears whatever "waiting" state the creator's client
     # is showing.
     return {"type": "room_started", "payload": None}
+
+
+def encode_arrival(event):
+    return {
+        "type": "arrival",
+        "payload": {"piece": event.piece, "destination": list(event.destination), "captured": event.captured},
+    }
+
+
+def encode_game_over(winner):
+    return {"type": "game_over", "payload": {"winner": winner}}

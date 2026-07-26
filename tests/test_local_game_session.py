@@ -2,7 +2,7 @@ import time
 
 from config import settings
 from bus.event_bus import EventBus
-from view.local_game_session import LocalGameSession
+from client.session.local_game_session import LocalGameSession
 
 
 def make_session(board_lines, config=settings, events=None):

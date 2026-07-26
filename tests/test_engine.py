@@ -14,7 +14,7 @@ from realtime.real_time_arbiter import RealTimeArbiter
 from bus.event_bus import EventBus
 from game.engine import GameEngine
 from rules.reasons import Reason
-from view.renderer import BoardRenderer
+from client.view.renderer import BoardRenderer
 
 
 class NeverEndsWinCondition(WinCondition):

@@ -1,7 +1,7 @@
 import logging
 
 from bus.event_bus import EventBus
-from view.session_logging import attach_session_logging
+from client.session.session_logging import attach_session_logging
 
 
 def test_logged_events_do_not_raise_for_any_payload_shape():
@@ -26,7 +26,7 @@ def test_login_event_is_logged(caplog):
     events = EventBus()
     attach_session_logging(events)
 
-    with caplog.at_level(logging.INFO, logger="view.session_logging"):
+    with caplog.at_level(logging.INFO, logger="client.session.session_logging"):
         events.publish("login", {"username": "alice", "rating": 1200})
 
     assert any("login" in record.message and "alice" in record.message for record in caplog.records)
@@ -36,7 +36,7 @@ def test_room_and_viewer_rejection_events_are_logged(caplog):
     events = EventBus()
     attach_session_logging(events)
 
-    with caplog.at_level(logging.INFO, logger="view.session_logging"):
+    with caplog.at_level(logging.INFO, logger="client.session.session_logging"):
         events.publish("room", {"room_id": "abc123", "role": "viewer"})
         events.publish("error", {"message": "Only seated players can make moves"})
 
@@ -49,7 +49,7 @@ def test_unrelated_event_types_are_not_logged(caplog):
     events = EventBus()
     attach_session_logging(events)
 
-    with caplog.at_level(logging.INFO, logger="view.session_logging"):
+    with caplog.at_level(logging.INFO, logger="client.session.session_logging"):
         events.publish("score_changed", {"color": "w", "score": 3})
 
     assert caplog.records == []

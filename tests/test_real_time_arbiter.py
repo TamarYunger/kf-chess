@@ -102,6 +102,22 @@ def test_friendly_piece_at_destination_cancels_arrival():
     assert events == []
 
 
+def test_move_settling_onto_an_altered_source_cell_emits_no_event():
+    # If the piece that started this move is no longer at its own source
+    # cell by the time the move is due (e.g. some other resolved move
+    # landed there first and overwrote it), the move must not resurrect a
+    # piece that is no longer really there - no event, no board change at
+    # the destination.
+    arbiter, board = make_arbiter([["wR", ".", "."]])
+    arbiter.start_move("wR", (0, 0), (0, 2))
+    board.set(0, 0, "bN")  # something else now occupies the mover's own start
+    events = arbiter.advance_time(2 * settings.MOVE_DURATION)
+
+    assert events == []
+    assert board.get(0, 0) == "bN"  # untouched - the move never actually settles
+    assert board.is_empty(0, 2)  # destination never received anything
+
+
 def test_due_moves_settle_in_arrival_order_not_registration_order():
     # wR is registered first but travels 3 squares (arrives later); wP is
     # registered second but travels 1 square (arrives earlier). A single
@@ -157,6 +173,24 @@ def test_later_starting_move_stops_short_of_a_same_color_path_crossing():
     assert moves["wR"].end == (5, 4)
     assert moves["wR"].arrival == int(1.5 * settings.MOVE_DURATION) + 2 * settings.MOVE_DURATION
     assert moves["wQ"].end == (4, 7)
+
+
+def test_move_fully_blocked_before_its_first_step_never_leaves_its_own_start():
+    # Same crossing geometry as the "stops short" test above, but the rook
+    # starts late enough (5 durations after the queen) that even its very
+    # first step - the crossing cell e4=(4,4) itself - collides: the queen
+    # already passed through there by the time the rook would arrive, so
+    # the rook's path is truncated all the way back to nothing (path[:0])
+    # and it never actually leaves its own start square.
+    arbiter, board = make_arbiter(_empty_board())
+    arbiter.start_move("wQ", (4, 0), (4, 7))
+    arbiter.advance_time(5 * settings.MOVE_DURATION)
+    arbiter.start_move("wR", (5, 4), (0, 4))
+
+    rook = next(move for move in arbiter.active_moves if move.piece == "wR")
+    assert rook.end == (5, 4)  # never left its own start
+    assert rook.path == ()
+    assert rook.arrival == 5 * settings.MOVE_DURATION
 
 
 def test_knight_shaped_move_is_never_shortened_by_a_path_crossing():
@@ -238,6 +272,16 @@ def test_active_moves_and_jumps_reflect_in_flight_state():
     assert arbiter.active_moves[0].start == (0, 0)
     assert len(arbiter.active_jumps) == 1
     assert arbiter.active_jumps[0].cell == (0, 1)
+
+
+def test_a_jump_short_of_its_own_duration_stays_active():
+    arbiter, board = make_arbiter([["bP", ".", "."]])
+    arbiter.start_jump("bP", (0, 0))
+    arbiter.advance_time(settings.JUMP_DURATION - 1)
+
+    assert len(arbiter.active_jumps) == 1
+    assert arbiter.active_jumps[0].piece == "bP"
+    assert arbiter.recent_arrivals == ()
 
 
 def test_active_moves_empties_once_settled():

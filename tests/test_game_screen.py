@@ -1,9 +1,9 @@
 from bus.event_bus import EventBus
 from config import settings
-from view.game_screen import GameScreen
-from view.graphics_renderer import SIDE_PANEL_WIDTH
-from view.img import Img
-from view.snapshot_codec import snapshot_from_json
+from client.session.snapshot_codec import snapshot_from_json
+from client.view.game_screen import GameScreen
+from client.view.graphics_renderer import SIDE_PANEL_WIDTH
+from client.view.img import Img
 
 
 def minimal_json(**overrides):

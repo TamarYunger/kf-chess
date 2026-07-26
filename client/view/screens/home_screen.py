@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import time
 
-from view.graphics_renderer import GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GAP, GAME_OVER_TEXT_COLOR
-from view.img import Img
-from view.screen_manager import Screen
-from view.screens.room_dialog import RoomDialog
+from client.view.button import Button
+from client.view.graphics_renderer import GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GAP, GAME_OVER_TEXT_COLOR
+from client.view.img import Img
+from client.view.screen_manager import Screen
+from client.view.screens.room_dialog import RoomDialog
 
 SCREEN_WIDTH = 480
 SCREEN_HEIGHT = 340
@@ -18,10 +19,7 @@ TITLE_Y = 60
 
 PLAY_BUTTON_X, PLAY_BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT = 90, 140, 300, 50
 PLAY_BUTTON_COLOR = (0, 130, 0, 255)  # BGRA green
-BUTTON_TEXT_COLOR = (255, 255, 255, 255)  # BGRA white
-BUTTON_FONT_SCALE = 0.7
 PLAY_BUTTON_LABEL = "Play"
-BUTTON_FILLED = -1  # cv2.FILLED, drawn ourselves rather than a native widget
 
 ROOM_BUTTON_X, ROOM_BUTTON_Y = 90, 210
 ROOM_BUTTON_COLOR = (150, 90, 0, 255)  # BGRA blue
@@ -47,7 +45,7 @@ class HomeScreen(Screen):
     by id directly.
 
     Neither button does anything itself beyond submitting a command -
-    ScreenManager's own bus-driven transitions (see main_gui.py's
+    ScreenManager's own bus-driven transitions (see main_online.py's
     build_screens: transitions={"room": "GAME"}) are what move on to the
     board once the server actually seats this connection somewhere
     (PLAY's match or ROOM CREATE/JOIN both end up publishing the same
@@ -67,6 +65,12 @@ class HomeScreen(Screen):
         self._searching_since = None  # wall-clock time.time(), or None if not searching
         self._no_match = False
         self._room_dialog = RoomDialog(session)
+        self._play_button = Button(
+            PLAY_BUTTON_X, PLAY_BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT, PLAY_BUTTON_LABEL, PLAY_BUTTON_COLOR,
+        )
+        self._room_button = Button(
+            ROOM_BUTTON_X, ROOM_BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT, ROOM_BUTTON_LABEL, ROOM_BUTTON_COLOR,
+        )
         events.subscribe("no_match", self._on_no_match)
 
     def on_enter(self):
@@ -82,8 +86,8 @@ class HomeScreen(Screen):
         if self._searching_since is not None:
             self._draw_searching_overlay(canvas)
         else:
-            self._draw_button(canvas, PLAY_BUTTON_X, PLAY_BUTTON_Y, PLAY_BUTTON_LABEL, PLAY_BUTTON_COLOR)
-            self._draw_button(canvas, ROOM_BUTTON_X, ROOM_BUTTON_Y, ROOM_BUTTON_LABEL, ROOM_BUTTON_COLOR)
+            self._play_button.draw(canvas)
+            self._room_button.draw(canvas)
             if self._no_match:
                 self._draw_no_match_message(canvas)
 
@@ -95,9 +99,9 @@ class HomeScreen(Screen):
             return
         if self._searching_since is not None:
             return  # already searching - buttons aren't shown/clickable
-        if self._button_contains(PLAY_BUTTON_X, PLAY_BUTTON_Y, x, y):
+        if self._play_button.contains(x, y):
             self._start_search()
-        elif self._button_contains(ROOM_BUTTON_X, ROOM_BUTTON_Y, x, y):
+        elif self._room_button.contains(x, y):
             self._room_dialog.open()
 
     def handle_key(self, key):
@@ -113,16 +117,6 @@ class HomeScreen(Screen):
     def _on_no_match(self, payload):
         self._searching_since = None
         self._no_match = True
-
-    def _button_contains(self, button_x, button_y, x, y):
-        return button_x <= x <= button_x + BUTTON_WIDTH and button_y <= y <= button_y + BUTTON_HEIGHT
-
-    def _draw_button(self, canvas, x, y, label, color):
-        canvas.rectangle((x, y), (x + BUTTON_WIDTH, y + BUTTON_HEIGHT), color, BUTTON_FILLED)
-        text_w, text_h = canvas.text_size(label, BUTTON_FONT_SCALE, 2)
-        text_x = x + (BUTTON_WIDTH - text_w) // 2
-        text_y = y + (BUTTON_HEIGHT + text_h) // 2
-        canvas.put_text(label, text_x, text_y, BUTTON_FONT_SCALE, BUTTON_TEXT_COLOR, 2)
 
     def _draw_no_match_message(self, canvas):
         text_w, _ = canvas.text_size(NO_MATCH_TEXT, NO_MATCH_FONT_SCALE, 2)

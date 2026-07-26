@@ -1,9 +1,9 @@
 from bus.event_bus import EventBus
-from view.img import Img
-from view.screens.home_screen import (
+from client.view.img import Img
+from client.view.screens.home_screen import (
     BUTTON_HEIGHT, BUTTON_WIDTH, PLAY_BUTTON_X, PLAY_BUTTON_Y, ROOM_BUTTON_X, ROOM_BUTTON_Y, HomeScreen,
 )
-from view.screens.room_dialog import (
+from client.view.screens.room_dialog import (
     BUTTON_HEIGHT as ROOM_BUTTON_HEIGHT, BUTTON_WIDTH as ROOM_BUTTON_WIDTH,
     BUTTON_Y as ROOM_DIALOG_BUTTON_Y, CANCEL_BUTTON_X, CREATE_BUTTON_X, JOIN_BUTTON_X,
 )

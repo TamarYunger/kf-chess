@@ -8,11 +8,11 @@ from rules.rule_engine import RuleEngine
 from rules.rule_registry import build_default_registry
 from game.engine import GameEngine
 from server.protocol import (
-    Command, ProtocolError, encode_error, encode_login, encode_login_rejected,
+    Command, ProtocolError, encode_arrival, encode_error, encode_game_over, encode_login, encode_login_rejected,
     encode_no_match, encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected,
     encode_room, encode_room_started, encode_snapshot, encode_waiting_for_opponent, parse_command, resolve_cells,
 )
-from view.snapshot_codec import snapshot_from_json
+from client.session.snapshot_codec import snapshot_from_json
 
 
 def make_engine(rows, config=settings):
@@ -71,7 +71,7 @@ def test_resolve_cells_raises_protocol_error_on_a_malformed_square():
 
 def test_encode_snapshot_shape_is_decodable_by_the_client_codec():
     # The whole point of this shape: server/protocol.py and
-    # view/snapshot_codec.py must agree, or a real client can never
+    # session/snapshot_codec.py must agree, or a real client can never
     # actually render what the server sends.
     engine, board = make_engine([["wR", ".", "."], [".", ".", "."], [".", ".", "bK"]])
     engine.request_move((0, 0), (0, 2))
@@ -197,3 +197,27 @@ def test_encode_waiting_for_opponent_shape():
 
 def test_encode_room_started_shape():
     assert encode_room_started() == {"type": "room_started", "payload": None}
+
+
+def test_encode_arrival_shape():
+    from realtime.real_time_arbiter import ArrivalEvent
+    event = ArrivalEvent(piece="wR", destination=(0, 2), captured="bK")
+
+    assert encode_arrival(event) == {
+        "type": "arrival",
+        "payload": {"piece": "wR", "destination": [0, 2], "captured": "bK"},
+    }
+
+
+def test_encode_arrival_shape_for_a_non_capturing_move():
+    from realtime.real_time_arbiter import ArrivalEvent
+    event = ArrivalEvent(piece="wR", destination=(0, 2), captured=None)
+
+    assert encode_arrival(event) == {
+        "type": "arrival",
+        "payload": {"piece": "wR", "destination": [0, 2], "captured": None},
+    }
+
+
+def test_encode_game_over_shape():
+    assert encode_game_over("w") == {"type": "game_over", "payload": {"winner": "w"}}

@@ -1,5 +1,5 @@
-from view.img import Img
-from view.text_input import TextInput
+from client.view.img import Img
+from client.view.text_input import TextInput
 
 
 def test_starts_empty_and_unfocused():

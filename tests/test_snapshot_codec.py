@@ -1,6 +1,6 @@
 from config import settings
-from view.graphics_renderer import GraphicsRenderer
-from view.snapshot_codec import snapshot_from_json
+from client.session.snapshot_codec import snapshot_from_json
+from client.view.graphics_renderer import GraphicsRenderer
 
 
 def minimal_json(**overrides):

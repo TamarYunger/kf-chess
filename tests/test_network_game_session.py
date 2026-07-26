@@ -5,12 +5,12 @@ import time
 import websockets
 
 from bus.event_bus import EventBus
-from view.network_client import NetworkClient
-from view.network_game_session import NetworkGameSession
+from client.session.network_client import NetworkClient
+from client.session.network_game_session import NetworkGameSession
 
 
 class FakeNetworkClient:
-    """Stands in for view.network_client.NetworkClient - NetworkGameSession
+    """Stands in for session.network_client.NetworkClient - NetworkGameSession
     is tested against this fake here; NetworkClient itself already has its
     own real-websocket integration tests (tests/test_network_client.py)."""
 
@@ -139,14 +139,17 @@ def test_click_before_any_snapshot_sends_nothing():
     assert client.sent == []
 
 
-def test_first_click_does_not_send_anything_yet():
+def test_first_click_sends_a_select_query():
+    # Unlike the offline hotseat path (which highlights instantly from its
+    # own in-process GameEngine), the network client has to ask the server
+    # what's legal - it's the one place authoritative rules live.
     session, client, events = make_session()
     client.push(snapshot_message())
     session.tick()
 
     session.submit_command({"type": "click", "cell": (0, 0)})
 
-    assert client.sent == []
+    assert client.sent == ["SELECT a3"]
 
 
 def test_second_click_sends_a_move_with_both_squares():
@@ -157,10 +160,10 @@ def test_second_click_sends_a_move_with_both_squares():
     session.submit_command({"type": "click", "cell": (0, 0)})
     session.submit_command({"type": "click", "cell": (0, 2)})
 
-    assert client.sent == ["MOVE a3 c3"]
+    assert client.sent == ["SELECT a3", "MOVE a3 c3"]
 
 
-def test_clicking_the_same_cell_twice_deselects_without_sending():
+def test_clicking_the_same_cell_twice_deselects_without_sending_a_move():
     session, client, events = make_session()
     client.push(snapshot_message())
     session.tick()
@@ -169,7 +172,7 @@ def test_clicking_the_same_cell_twice_deselects_without_sending():
     session.submit_command({"type": "click", "cell": (0, 0)})
     session.tick()
 
-    assert client.sent == []
+    assert client.sent == ["SELECT a3"]
     assert session.latest_snapshot().selected is None
 
 
@@ -184,6 +187,49 @@ def test_a_third_click_starts_a_new_selection():
     session.tick()
 
     assert session.latest_snapshot().selected == (1, 1)
+    assert client.sent == ["SELECT a3", "SELECT b2"]
+
+
+def test_legal_destinations_reply_is_reflected_in_the_snapshot():
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.tick()
+    session.submit_command({"type": "click", "cell": (0, 0)})
+
+    client.push({"type": "legal_destinations", "payload": {"start": [0, 0], "destinations": [[0, 1], [1, 0]]}})
+    session.tick()
+
+    assert session.latest_snapshot().legal_destinations == frozenset({(0, 1), (1, 0)})
+
+
+def test_a_stale_legal_destinations_reply_is_ignored():
+    # The reply to the first click's SELECT arrives after a second click
+    # already cleared _pending_start - too late to matter.
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.tick()
+    session.submit_command({"type": "click", "cell": (0, 0)})
+    session.submit_command({"type": "click", "cell": (0, 2)})  # sends MOVE, clears pending_start
+
+    client.push({"type": "legal_destinations", "payload": {"start": [0, 0], "destinations": [[0, 1]]}})
+    session.tick()
+
+    assert session.latest_snapshot().legal_destinations == frozenset()
+
+
+def test_a_new_selection_clears_the_previous_ones_destinations():
+    session, client, events = make_session()
+    client.push(snapshot_message())
+    session.tick()
+    session.submit_command({"type": "click", "cell": (0, 0)})
+    client.push({"type": "legal_destinations", "payload": {"start": [0, 0], "destinations": [[0, 1]]}})
+    session.tick()
+    session.submit_command({"type": "click", "cell": (0, 0)})  # deselect
+
+    session.submit_command({"type": "click", "cell": (1, 1)})  # fresh selection
+    session.tick()
+
+    assert session.latest_snapshot().legal_destinations == frozenset()
 
 
 def test_jump_command_sends_jump_immediately():
@@ -283,11 +329,11 @@ def test_end_to_end_against_a_real_websocket_server():
                 session.submit_command({"type": "click", "cell": (0, 2)})
 
                 deadline = time.time() + 5.0
-                while not received_from_client and time.time() < deadline:
+                while len(received_from_client) < 2 and time.time() < deadline:
                     await asyncio.sleep(0.02)
-                # A genuine text command reached the server - not JSON, and
+                # Genuine text commands reached the server - not JSON, and
                 # not double-encoded (see NetworkClient.send's str branch).
-                assert received_from_client == ["MOVE a3 c3"]
+                assert received_from_client == ["SELECT a3", "MOVE a3 c3"]
             finally:
                 session.close()
 

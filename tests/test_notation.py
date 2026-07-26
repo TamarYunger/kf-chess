@@ -1,7 +1,7 @@
 import pytest
 
+from board.notation import square_name, parse_square, move_notation
 from game.models import MoveRecord
-from view.notation import square_name, parse_square, move_notation
 
 
 def test_square_name_uses_algebraic_files_and_ranks_from_the_bottom():

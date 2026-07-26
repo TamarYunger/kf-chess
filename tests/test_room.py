@@ -199,6 +199,82 @@ def test_a_seated_player_cannot_move_the_other_colors_piece():
     run(scenario())
 
 
+def test_select_replies_with_legal_destinations_for_the_requesters_own_piece():
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", "bK . ."])
+        white = FakeConnection()
+        room.seat_or_view(white, "alice", 1200)
+        room.seat_or_view(FakeConnection(), "bob", 1200)
+
+        await room.handle_command(white, parse_command("SELECT a3"))
+
+        reply = json.loads(white.sent[-1])
+        assert reply == {
+            "type": "legal_destinations",
+            "payload": {"start": [0, 0], "destinations": [[0, 1], [0, 2], [1, 0], [2, 0]]},
+        }
+
+    run(scenario())
+
+
+def test_select_of_the_opponents_piece_replies_with_no_destinations():
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", "bK . ."])
+        white = FakeConnection()
+        room.seat_or_view(white, "alice", 1200)
+        room.seat_or_view(FakeConnection(), "bob", 1200)
+
+        await room.handle_command(white, parse_command("SELECT a1"))  # a1 holds the black king
+
+        reply = json.loads(white.sent[-1])
+        assert reply == {"type": "legal_destinations", "payload": {"start": [2, 0], "destinations": []}}
+
+    run(scenario())
+
+
+def test_select_of_an_empty_cell_replies_with_no_destinations():
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", "bK . ."])
+        white = FakeConnection()
+        room.seat_or_view(white, "alice", 1200)
+        room.seat_or_view(FakeConnection(), "bob", 1200)
+
+        await room.handle_command(white, parse_command("SELECT b3"))
+
+        reply = json.loads(white.sent[-1])
+        assert reply == {"type": "legal_destinations", "payload": {"start": [0, 1], "destinations": []}}
+
+    run(scenario())
+
+
+def test_select_from_a_non_seated_connection_is_rejected():
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", "bK . ."])
+        stranger = FakeConnection()
+
+        await room.handle_command(stranger, parse_command("SELECT a3"))
+
+        error = json.loads(stranger.sent[-1])
+        assert error["type"] == "error"
+
+    run(scenario())
+
+
+def test_select_is_answered_even_before_the_room_has_started():
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", ". . ."])
+        alone = FakeConnection()
+        room.seat_or_view(alone, "alice", 1200)
+
+        await room.handle_command(alone, parse_command("SELECT a3"))
+
+        reply = json.loads(alone.sent[-1])
+        assert reply["type"] == "legal_destinations"
+        assert reply["payload"]["destinations"] != []
+
+    run(scenario())
+
+
 def test_illegal_move_is_rejected_not_broadcast():
     async def scenario():
         room, engine = make_room(["wN . .", ". . .", ". . ."])
@@ -266,6 +342,31 @@ def test_reconnect_with_the_same_username_reclaims_the_seat():
     run(scenario())
 
 
+def test_is_reclaimable_and_notify_reconnected_around_a_reconnect():
+    async def scenario():
+        room, engine = make_room()
+        alice = FakeConnection()
+        bob = FakeConnection()
+        role_alice = room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(bob, "bob", 1200)
+        await room.handle_disconnect(alice)
+
+        assert room.is_reclaimable("alice") is True
+        assert room.is_reclaimable("bob") is False
+
+        new_connection = FakeConnection()
+        role = room.seat_or_view(new_connection, "alice", 1200)
+        assert room.is_reclaimable("alice") is False  # reclaimed, no longer pending
+
+        bob.sent.clear()
+        await room.notify_reconnected(role)
+
+        notice = json.loads(bob.sent[-1])
+        assert notice == {"type": "opponent_reconnected", "payload": {"color": role_alice}}
+
+    run(scenario())
+
+
 def test_a_different_username_cannot_steal_a_disconnected_seat():
     async def scenario():
         room, engine = make_room()
@@ -326,5 +427,202 @@ def test_game_over_updates_both_ratings_via_the_shared_events_bus():
         loser_username = "bob" if winner_username == "alice" else "alice"
         assert accounts.get_rating(winner_username) > 1200
         assert accounts.get_rating(loser_username) < 1200
+
+    run(scenario())
+
+
+def test_tick_broadcasts_an_arrival_message_once_a_move_lands():
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", "bK . ."])
+        alice = FakeConnection()
+        bob = FakeConnection()
+        room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(bob, "bob", 1200)
+        await room.handle_command(alice, parse_command("MOVE a3 b3"))  # 1 square
+        bob.sent.clear()
+
+        await room.tick(time.monotonic() + settings.MOVE_DURATION / 1000 + 0.2)
+
+        arrivals = [json.loads(m) for m in bob.sent if json.loads(m)["type"] == "arrival"]
+        assert arrivals == [{"type": "arrival", "payload": {"piece": "wR", "destination": [0, 1], "captured": None}}]
+
+    run(scenario())
+
+
+def test_tick_broadcasts_arrival_and_game_over_for_a_king_capturing_move():
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", "bK . ."])
+        alice = FakeConnection()
+        bob = FakeConnection()
+        role_alice = room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(bob, "bob", 1200)
+        await room.handle_command(alice, parse_command("MOVE a3 a1"))  # 2 squares, captures bK
+        bob.sent.clear()
+
+        await room.tick(time.monotonic() + 2 * settings.MOVE_DURATION / 1000 + 0.2)
+
+        messages = [json.loads(m) for m in bob.sent]
+        arrival = next(m for m in messages if m["type"] == "arrival")
+        game_over = next(m for m in messages if m["type"] == "game_over")
+        assert arrival["payload"] == {"piece": "wR", "destination": [2, 0], "captured": "bK"}
+        assert game_over["payload"] == {"winner": role_alice}
+
+    run(scenario())
+
+
+def test_handle_command_flushes_an_event_that_became_due_between_ticks():
+    # The narrow real race this guards against: engine time can only ever
+    # advance through Room.tick(), but a client's command can reach the
+    # room in the window between two periodic ticks, after the engine
+    # clock (and so resolve()) has already moved past a pending move's
+    # arrival - handle_command must still flush that, not wait for the
+    # next tick. Simulated here by advancing the engine directly (as
+    # tick() itself would) without going through Room.tick() at all, then
+    # issuing an unrelated command.
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", "bK . ."])
+        alice = FakeConnection()
+        bob = FakeConnection()
+        room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(bob, "bob", 1200)
+        await room.handle_command(alice, parse_command("MOVE a3 b3"))
+        bob.sent.clear()
+
+        engine.wait(settings.MOVE_DURATION)  # settles the move, bypassing Room.tick()
+
+        await room.handle_command(alice, parse_command("SELECT a3"))  # any other command
+
+        arrivals = [json.loads(m) for m in bob.sent if json.loads(m)["type"] == "arrival"]
+        assert len(arrivals) == 1
+
+    run(scenario())
+
+
+def test_on_game_over_is_a_noop_when_colors_isnt_the_two_player_case():
+    # _on_game_over assumes exactly two colors (Elo is a two-player rating) -
+    # a room configured with any other color count must not blow up or
+    # touch accounts when the engine it wraps reports game_over.
+    engine = build_engine(["wK . .", ". . .", ". . ."], settings)
+    accounts = AccountStore()
+    Room("room1", engine, colors=("w",), accounts=accounts)
+
+    engine.events.publish("game_over", {"winner": "w"})  # must not raise
+
+    assert accounts.get_rating("w") is None  # never looked up, let alone written
+
+
+def test_on_game_over_is_a_noop_when_a_seat_was_never_filled():
+    # A game_over reported before both colors are ever seated (e.g. the
+    # engine's own win condition fires while a room is still waiting for a
+    # second player) has nothing to rate - only one seat's info is known.
+    events = EventBus()
+    accounts = AccountStore()
+    room, engine = make_room(["wK . .", ". . .", "bK . ."], events=events, accounts=accounts)
+    accounts.authenticate("alice", "pw1")
+    room.seat_or_view(FakeConnection(), "alice", 1200)
+
+    engine.events.publish("game_over", {"winner": "w"})  # must not raise
+
+    assert accounts.get_rating("alice") == 1200  # untouched
+
+
+def test_notify_room_started_is_a_noop_when_no_one_is_left_to_notify():
+    async def scenario():
+        room, engine = make_room()
+        creator = FakeConnection()
+        room.seat_or_view(creator, "alice", 1200)
+        await room.handle_disconnect(creator)  # no one left in the room at all
+
+        await room.notify_room_started(exclude=FakeConnection())  # must not raise
+
+    run(scenario())
+
+
+def test_broadcast_is_a_noop_when_the_room_is_empty():
+    async def scenario():
+        room, engine = make_room()
+
+        await room.broadcast()  # no seats, no viewers - must not raise
+
+    run(scenario())
+
+
+def test_select_with_a_malformed_square_replies_with_an_error():
+    async def scenario():
+        room, engine = make_room()
+        alice = FakeConnection()
+        room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(FakeConnection(), "bob", 1200)
+
+        await room.handle_command(alice, parse_command("SELECT zz"))
+
+        error = json.loads(alice.sent[-1])
+        assert error["type"] == "error"
+
+    run(scenario())
+
+
+def test_move_with_a_malformed_square_replies_with_an_error():
+    async def scenario():
+        room, engine = make_room()
+        alice = FakeConnection()
+        room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(FakeConnection(), "bob", 1200)
+
+        await room.handle_command(alice, parse_command("MOVE zz aa"))
+
+        error = json.loads(alice.sent[-1])
+        assert error["type"] == "error"
+
+    run(scenario())
+
+
+def test_seated_jump_is_accepted_and_broadcast():
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", "bK . ."])
+        alice = FakeConnection()
+        room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(FakeConnection(), "bob", 1200)
+
+        await room.handle_command(alice, parse_command("JUMP a3"))  # alice's own rook
+
+        accepted = json.loads(alice.sent[-1])
+        assert accepted["type"] == "snapshot"
+
+    run(scenario())
+
+
+def test_seated_jump_is_rejected_when_the_cell_is_empty():
+    async def scenario():
+        room, engine = make_room(["wR . .", ". . .", "bK . ."])
+        alice = FakeConnection()
+        room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(FakeConnection(), "bob", 1200)
+
+        await room.handle_command(alice, parse_command("JUMP b3"))  # empty cell
+
+        rejected = json.loads(alice.sent[-1])
+        assert rejected == {"type": "rejected", "payload": {"reason": "empty_cell"}}
+
+    run(scenario())
+
+
+def test_a_real_illegal_move_is_rejected_with_its_actual_reason_once_started():
+    # Unlike test_illegal_move_is_rejected_not_broadcast (only one seat
+    # filled, so it's rejected earlier as waiting_for_opponent), this seats
+    # both colors first, so the rejection actually comes from GameEngine.
+    async def scenario():
+        room, engine = make_room(["wN . .", ". . .", "bK . ."])
+        alice = FakeConnection()
+        room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(FakeConnection(), "bob", 1200)
+
+        await room.handle_command(alice, parse_command("MOVE a3 b3"))  # not a legal knight move
+
+        rejected = json.loads(alice.sent[-1])
+        assert rejected == {"type": "rejected", "payload": {"reason": "illegal_piece_move"}}
+        assert engine.snapshot().cells[0][0] == "wN"  # untouched
+
+    run(scenario())
 
     run(scenario())

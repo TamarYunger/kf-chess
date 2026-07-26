@@ -1,7 +1,7 @@
 import math
 from dataclasses import dataclass
 
-from view.piece_assets import token_to_folder, state_duration_ms
+from client.view.piece_assets import token_to_folder, state_duration_ms
 
 # How high a jumping piece lifts off its cell at the peak of its arc,
 # as a fraction of one cell's height.

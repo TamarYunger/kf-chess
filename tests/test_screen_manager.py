@@ -1,5 +1,5 @@
 from bus.event_bus import EventBus
-from view.screen_manager import Screen, ScreenManager
+from client.view.screen_manager import Screen, ScreenManager
 
 
 class FakeScreen(Screen):

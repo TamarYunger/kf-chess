@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import time
 
-from view.graphics_renderer import GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GAP, GAME_OVER_TEXT_COLOR
-from view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
-from view.img import Img
-from view.screen_manager import Screen
+from client.view.graphics_renderer import GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GAP, GAME_OVER_TEXT_COLOR
+from client.view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
+from client.view.img import Img
+from client.view.screen_manager import Screen
 
 CONNECTING_TEXT = "Connecting to server..."
 CONNECTING_TEXT_COLOR = (230, 230, 230, 255)  # BGRA near-white
@@ -74,11 +74,12 @@ class GameScreen(Screen):
         events.subscribe("room_started", self._on_room_started)
 
     def render(self, canvas):
-        # A pure read - main_gui.py's loop is what calls session.tick()
-        # once per frame, regardless of which screen is current (see
-        # GameSession.tick's own docstring for why this screen must not
-        # do that itself). Cached for handle_click/handle_double_click,
-        # which run from the mouse callback, not this per-frame call.
+        # A pure read - view/app_loop.py's run_app is what calls
+        # session.tick() once per frame, regardless of which screen is
+        # current (see GameSession.tick's own docstring for why this
+        # screen must not do that itself). Cached for handle_click/
+        # handle_double_click, which run from the mouse callback, not
+        # this per-frame call.
         self._last_snapshot = self._session.latest_snapshot()
         if self._last_snapshot is None:
             self._render_connecting(canvas)

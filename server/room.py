@@ -18,14 +18,14 @@ import json
 import logging
 import time
 
-import websockets.exceptions
-
 from board.piece import color_of
 from server.elo import update_ratings
 from server.protocol import (
-    ProtocolError, encode_error, encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected,
-    encode_room, encode_room_started, encode_snapshot, encode_waiting_for_opponent, resolve_cells,
+    ProtocolError, encode_arrival, encode_error, encode_game_over, encode_legal_destinations,
+    encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected, encode_room,
+    encode_room_started, encode_snapshot, encode_waiting_for_opponent, resolve_cells,
 )
+from server.safe_send import safe_send
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,17 @@ class Room:
         # is accepted - see handle_command.
         self._started = len(self._colors) < 2
         self._last_tick = time.monotonic()
+        # GameEngine's own events fire synchronously, mid-call, from deep
+        # inside handle_command/tick (see resolve()'s docstring: several
+        # engine methods settle anything already due before doing their own
+        # work) - too early to `await` a network send from. These two
+        # subscribers only ever queue a message; handle_command and tick
+        # are what actually flush the queue, once they're done touching the
+        # engine and can safely await again (see _flush_pending_events).
+        self._pending_events = []
         self._engine.events.subscribe("game_over", self._on_game_over)
+        self._engine.events.subscribe("game_over", self._on_game_over_for_clients)
+        self._engine.events.subscribe("arrival", self._on_arrival)
 
     @property
     def started(self):
@@ -92,6 +102,14 @@ class Room:
         logger.info("room %s: %s joined as a viewer", self.room_id, username)
         return "viewer"
 
+    def is_reclaimable(self, username):
+        """True if `username` has a disconnect grace period pending on some
+        color right now - checked by GameServer *before* calling
+        seat_or_view, so it knows afterwards whether that call just resolved
+        a reconnect (and the opponent needs an opponent_reconnected notice)
+        or seated/viewed someone fresh."""
+        return self._reclaimable_color(username) is not None
+
     def role_of(self, connection):
         if connection in self._seats:
             return self._seats[connection]
@@ -123,6 +141,17 @@ class Room:
             await self._safe_send(connection, json.dumps(encode_waiting_for_opponent()))
         await self._safe_send(connection, json.dumps(encode_snapshot(self._engine)))
 
+    async def notify_reconnected(self, color):
+        """Called by GameServer right after a seat_or_view() call that just
+        reclaimed a disconnected seat (is_reclaimable was True beforehand) -
+        tells everyone else in the room that color's disconnect countdown is
+        off; the reconnecting connection's own welcome() already covers
+        everything it needs, so this excludes no one but also isn't sent to
+        it specifically - a stale opponent_reconnected for its own color is
+        harmless and simpler than threading an exclude through here too."""
+        logger.info("room %s: %s reconnected, notifying room", self.room_id, color)
+        await self._notify_all(encode_opponent_reconnected(color))
+
     async def notify_room_started(self, exclude):
         """Called by GameServer right after a seat_or_view() call that just
         flipped `started` True for the first time (a ROOM JOIN completing
@@ -137,15 +166,42 @@ class Room:
         await asyncio.gather(*(self._safe_send(c, message) for c in connections))
 
     async def handle_command(self, connection, command):
-        """MOVE/JUMP only - LOGIN/PLAY/ROOM are lobby-level, handled by
-        GameServer before a command ever reaches a specific room. A
+        """MOVE/JUMP/SELECT only - LOGIN/PLAY/ROOM are lobby-level, handled
+        by GameServer before a command ever reaches a specific room. A
         viewer's attempt is rejected and logged - the client itself
         (GameScreen) already doesn't submit these for a viewer, so
         reaching here at all means something bypassed that (e.g. a raw
-        handle_key-driven command)."""
+        handle_key-driven command).
+
+        Wrapped so every exit path - accepted, rejected, malformed, not
+        this connection's turn to speak at all - still flushes whatever
+        _on_arrival/_on_game_over_for_clients queued: SELECT/MOVE/JUMP all
+        end up calling an engine method that settles anything already due
+        first (see GameEngine.legal_destinations/request_move/request_jump
+        each calling resolve() before their own work), so an unrelated
+        earlier move can land - and need forwarding - even on a command
+        that itself gets rejected.
+        """
+        try:
+            await self._handle_command(connection, command)
+        finally:
+            await self._flush_pending_events()
+
+    async def _handle_command(self, connection, command):
         if connection not in self._seats:
             logger.warning("room %s: rejected %s from a non-seated connection", self.room_id, command.verb)
             await self._safe_send(connection, json.dumps(encode_error("Only seated players can make moves")))
+            return
+
+        if command.verb == "SELECT":
+            # Read-only: answered even before both seats are filled, and
+            # never rejected/logged as a game action - see _handle_select.
+            try:
+                cell = resolve_cells(command, self._board_height)[0]
+            except ProtocolError as error:
+                await self._safe_send(connection, json.dumps(encode_error(str(error))))
+                return
+            await self._handle_select(connection, cell)
             return
 
         if not self._started:
@@ -189,6 +245,24 @@ class Room:
         logger.info("room %s: %s by %s accepted", self.room_id, command.verb, self._seats[connection])
         await self.broadcast()
 
+    async def _handle_select(self, connection, cell):
+        """A client's first click on a piece, asking what its legal
+        destinations are right now (for the highlight NetworkGameSession
+        shows before its second click sends an actual MOVE) - answered with
+        GameEngine.legal_destinations, the exact same read the engine
+        itself relies on, so a highlighted square is never one MOVE would
+        then refuse. Empty for a cell that isn't the requester's own piece
+        (mirrors handle_command's own not_your_piece guard above, just
+        without the rejection message - this isn't a move attempt)."""
+        row, col = cell
+        piece = self._engine.snapshot().cells[row][col]
+        destinations = (
+            self._engine.legal_destinations(cell)
+            if piece != "." and color_of(piece) == self._seats[connection]
+            else frozenset()
+        )
+        await self._safe_send(connection, json.dumps(encode_legal_destinations(cell, destinations)))
+
     async def handle_disconnect(self, connection):
         self._viewers.discard(connection)
         color = self._seats.pop(connection, None)
@@ -204,6 +278,7 @@ class Room:
         self._last_tick = now
         self._engine.wait(dt_ms)
         await self._resolve_disconnect_timeouts(now)
+        await self._flush_pending_events()
         await self.broadcast()
 
     async def _resolve_disconnect_timeouts(self, now):
@@ -239,12 +314,19 @@ class Room:
             self.room_id, payload.get("winner"), info_a["username"], new_a, info_b["username"], new_b,
         )
 
+    def _on_arrival(self, event):
+        self._pending_events.append(encode_arrival(event))
+
+    def _on_game_over_for_clients(self, payload):
+        self._pending_events.append(encode_game_over(payload.get("winner")))
+
+    async def _flush_pending_events(self):
+        pending, self._pending_events = self._pending_events, []
+        for message in pending:
+            await self._notify_all(message)
+
     async def broadcast(self):
-        connections = set(self._seats) | self._viewers
-        if not connections:
-            return
-        message = json.dumps(encode_snapshot(self._engine))
-        await asyncio.gather(*(self._safe_send(c, message) for c in connections))
+        await self._notify_all(encode_snapshot(self._engine))
 
     async def _notify_all(self, message_dict):
         connections = set(self._seats) | self._viewers
@@ -257,7 +339,4 @@ class Room:
         # A client can disconnect between being read and actually being
         # sent to - that's not this room's problem to raise about;
         # handle_disconnect is what removes it from _seats/_viewers.
-        try:
-            await connection.send(message)
-        except websockets.exceptions.ConnectionClosed:
-            pass
+        await safe_send(connection, message)

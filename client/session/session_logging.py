@@ -2,9 +2,11 @@
 (a placeholder for a future sound/animation layer, reacting to
 GameEngine's own local events): this logs the network/session lifecycle
 itself - login attempts, room create/join, matchmaking results, connection
-state, a rejected move, a resignation - to whatever handler main_gui.py's
+state, a rejected move, a resignation - to whatever handler main_online.py's
 logging setup points at (a local log file), so a session can be debugged
-after the fact without reproducing it live.
+after the fact without reproducing it live. Only main_online.py attaches
+this - every event it logs is network-only, so a LocalGameSession's bus
+never publishes any of them.
 """
 from __future__ import annotations
 

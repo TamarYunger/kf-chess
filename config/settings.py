@@ -15,9 +15,10 @@ JUMP_DURATION = 1000
 # per the kind of motion that landed it (mirrors the "short_rest"/
 # "long_rest" animation states). These are the fallback values used by the
 # text-mode CLI and by tests, which have no loaded sprite assets to sync to;
-# main_gui.py overrides both at startup with the real short_rest/long_rest
-# sprites' own playback duration (frame_count/fps), so in the graphical game
-# the cooldown always exactly matches how long the rest animation plays.
+# every graphical entry point (main_gui.py, main_online.py) overrides both
+# at startup, via view/app_loop.py's with_synced_rest_durations, with the
+# real short_rest/long_rest sprites' own playback duration (frame_count/fps),
+# so the cooldown always exactly matches how long the rest animation plays.
 SHORT_REST_DURATION = 1000  # after landing from a jump
 LONG_REST_DURATION = 3000  # after landing from a move
 

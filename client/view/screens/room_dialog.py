@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from view.text_input import TextInput
+from client.view.button import FILLED, Button
+from client.view.text_input import TextInput
 
 # Assumes it's drawn within a 480x340 HOME canvas (view/screens/home_screen.py's
 # SCREEN_WIDTH/SCREEN_HEIGHT) - not imported directly to avoid a circular
@@ -26,8 +27,6 @@ BUTTON_HEIGHT = 40
 BUTTON_GAP = 15
 BUTTON_Y = DIALOG_Y + 110
 BUTTON_FONT_SCALE = 0.55
-BUTTON_TEXT_COLOR = (255, 255, 255, 255)  # BGRA white
-BUTTON_FILLED = -1  # cv2.FILLED, drawn ourselves rather than a native widget
 
 CREATE_BUTTON_X = DIALOG_X + 20
 JOIN_BUTTON_X = CREATE_BUTTON_X + BUTTON_WIDTH + BUTTON_GAP
@@ -52,7 +51,7 @@ class RoomDialog:
       - Cancel: closes the dialog - no server call at all, no state change.
     Either Create or a successful Join eventually produces a "room" event
     (server-confirmed) that ScreenManager's own transitions= wiring moves
-    on to GAME with (see main_gui.py) - this dialog doesn't need to know
+    on to GAME with (see main_online.py) - this dialog doesn't need to know
     that happens, it only closes itself once it has sent a command.
     """
 
@@ -61,6 +60,17 @@ class RoomDialog:
         self.is_open = False
         self._room_id_field = TextInput(
             FIELD_X, FIELD_Y, FIELD_WIDTH, FIELD_HEIGHT, placeholder="Room ID", on_submit=self._on_field_submit,
+        )
+        self._create_button = Button(
+            CREATE_BUTTON_X, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT, "Create", CREATE_COLOR,
+            font_scale=BUTTON_FONT_SCALE,
+        )
+        self._join_button = Button(
+            JOIN_BUTTON_X, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT, "Join", JOIN_COLOR, font_scale=BUTTON_FONT_SCALE,
+        )
+        self._cancel_button = Button(
+            CANCEL_BUTTON_X, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT, "Cancel", CANCEL_COLOR,
+            font_scale=BUTTON_FONT_SCALE,
         )
 
     def open(self):
@@ -75,7 +85,7 @@ class RoomDialog:
     def render(self, canvas):
         if not self.is_open:
             return
-        canvas.rectangle((DIALOG_X, DIALOG_Y), (DIALOG_X + DIALOG_WIDTH, DIALOG_Y + DIALOG_HEIGHT), DIALOG_BG_COLOR, BUTTON_FILLED)
+        canvas.rectangle((DIALOG_X, DIALOG_Y), (DIALOG_X + DIALOG_WIDTH, DIALOG_Y + DIALOG_HEIGHT), DIALOG_BG_COLOR, FILLED)
         canvas.rectangle(
             (DIALOG_X, DIALOG_Y), (DIALOG_X + DIALOG_WIDTH, DIALOG_Y + DIALOG_HEIGHT),
             DIALOG_BORDER_COLOR, DIALOG_BORDER_THICKNESS,
@@ -85,20 +95,20 @@ class RoomDialog:
             TITLE_TEXT, DIALOG_X + (DIALOG_WIDTH - text_w) // 2, TITLE_Y, TITLE_FONT_SCALE, DIALOG_BORDER_COLOR, 2,
         )
         self._room_id_field.render(canvas)
-        self._draw_button(canvas, CREATE_BUTTON_X, "Create", CREATE_COLOR)
-        self._draw_button(canvas, JOIN_BUTTON_X, "Join", JOIN_COLOR)
-        self._draw_button(canvas, CANCEL_BUTTON_X, "Cancel", CANCEL_COLOR)
+        self._create_button.draw(canvas)
+        self._join_button.draw(canvas)
+        self._cancel_button.draw(canvas)
 
     def handle_click(self, x, y):
         if not self.is_open:
             return
         if self._room_id_field.handle_click(x, y):
             return
-        if self._button_contains(CREATE_BUTTON_X, x, y):
+        if self._create_button.contains(x, y):
             self._create()
-        elif self._button_contains(JOIN_BUTTON_X, x, y):
+        elif self._join_button.contains(x, y):
             self._join()
-        elif self._button_contains(CANCEL_BUTTON_X, x, y):
+        elif self._cancel_button.contains(x, y):
             self.close()
 
     def handle_key(self, key):
@@ -120,13 +130,3 @@ class RoomDialog:
             return
         self._session.submit_command(f"ROOM JOIN {room_id}")
         self.close()
-
-    def _button_contains(self, button_x, x, y):
-        return button_x <= x <= button_x + BUTTON_WIDTH and BUTTON_Y <= y <= BUTTON_Y + BUTTON_HEIGHT
-
-    def _draw_button(self, canvas, x, label, color):
-        canvas.rectangle((x, BUTTON_Y), (x + BUTTON_WIDTH, BUTTON_Y + BUTTON_HEIGHT), color, BUTTON_FILLED)
-        text_w, text_h = canvas.text_size(label, BUTTON_FONT_SCALE, 2)
-        text_x = x + (BUTTON_WIDTH - text_w) // 2
-        text_y = BUTTON_Y + (BUTTON_HEIGHT + text_h) // 2
-        canvas.put_text(label, text_x, text_y, BUTTON_FONT_SCALE, BUTTON_TEXT_COLOR, 2)

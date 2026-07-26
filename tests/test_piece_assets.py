@@ -1,6 +1,6 @@
 import pytest
 
-from view.piece_assets import (
+from client.view.piece_assets import (
     token_to_folder,
     InvalidTokenError,
     load_state_config,
@@ -46,6 +46,17 @@ def test_load_all_piece_configs_discovers_every_piece_and_state():
     assert set(configs.keys()) == expected_folders
     for folder_configs in configs.values():
         assert set(folder_configs.keys()) == set(STATE_NAMES)
+
+
+def test_load_all_piece_configs_skips_non_directory_entries(tmp_path):
+    # Discovery iterates whatever's actually in the assets directory - a
+    # stray file sitting alongside the real piece folders (e.g. a README
+    # or .DS_Store) must be silently skipped, not mistaken for a piece.
+    (tmp_path / "README.txt").write_text("not a piece folder")
+
+    configs = load_all_piece_configs(tmp_path)
+
+    assert configs == {}
 
 
 def test_sprite_path_is_one_indexed_on_disk():

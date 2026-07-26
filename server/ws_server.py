@@ -5,7 +5,7 @@ then routes their MOVE/JUMP commands to whichever room they're in. Every
 room owns its own GameEngine; this class owns none directly.
 
 This is the third place in the codebase that wires up a GameEngine, next
-to main.py's run() (the batch/script CLI) and view/local_game_session.py
+to main.py's run() (the batch/script CLI) and session/local_game_session.py
 (the offline GUI path) - each is its own composition root for its own
 entry point, so a small amount of duplicated wiring here is expected
 rather than a shortcut worth removing.
@@ -20,7 +20,6 @@ import time
 from pathlib import Path
 
 import websockets
-import websockets.exceptions
 
 from board.loaders import load_text_board
 from bus.event_bus import EventBus
@@ -37,6 +36,7 @@ from server.protocol import (
     ProtocolError, encode_error, encode_login, encode_login_rejected, encode_no_match, parse_command,
 )
 from server.room import Room
+from server.safe_send import safe_send
 
 logger = logging.getLogger(__name__)
 
@@ -260,10 +260,13 @@ class GameServer:
             return
 
         was_started = room.started
+        was_reconnecting = room.is_reclaimable(player["username"])
         role = room.seat_or_view(connection, player["username"], player["rating"])
         self._connection_room[connection] = room.room_id
         logger.info("%s joined room %s as %s", player["username"], room.room_id, role)
         await room.welcome(connection, role)
+        if was_reconnecting:
+            await room.notify_reconnected(role)
         if room.started and not was_started:
             await room.notify_room_started(exclude=connection)
 
@@ -286,10 +289,7 @@ class GameServer:
         # actually being sent to (e.g. mid-broadcast) - that's not this
         # server's problem to raise about; handle_connection's own loop
         # ending is what removes it from self._clients.
-        try:
-            await connection.send(message)
-        except websockets.exceptions.ConnectionClosed:
-            pass
+        await safe_send(connection, message)
 
 
 async def serve_forever(host=DEFAULT_HOST, port=DEFAULT_PORT, on_ready=None, accounts=None, config=settings,

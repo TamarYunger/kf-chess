@@ -1,39 +1,28 @@
-"""KungFu Chess - interactive graphical entry point.
+"""KungFu Chess - offline entry point ("Play Offline"): wires a
+LocalGameSession straight into GameScreen, no server or network involved
+at all - hotseat, both colors played from this one window.
 
-Talks only to a GameSession (view/game_session.py), never to GameEngine or
-a network client directly - so this loop works identically whether the
-game is running fully offline (LocalGameSession, the default: no server
-involved at all) or over the network (NetworkGameSession, talking to a
-real server over WebSocket). Which one is used is decided once, in
-run_gui's `mode` argument - never mid-run; a future home screen's "Play
-Offline" vs "Login" choice would just call run_gui with a different mode.
-
-For a networked session the actual WebSocket connection - and the asyncio
-event loop it needs - lives on its own background thread (this render loop
-is synchronous, driven by cv2.waitKey, and must never block on network
-I/O); see view/network_client.py. Either way, every screen transition is
-driven by bus events (view/screen_manager.py), not hardcoded here.
+main_online.py is the networked counterpart (LOGIN -> HOME -> PLAY/ROOM ->
+GAME, talking to a real server). The two don't share a process or a mode
+flag - each is its own composition root - but both share view/app_loop.py's
+window/render loop and config-setup helpers instead of duplicating them,
+and both hand the exact same GameScreen a GameSession it can't tell apart
+from the other's (session/game_session.py) - see GameSession's own
+docstring for why that's what lets GameScreen itself stay unaware of which
+one it's ever built with.
 """
-import logging
-import types
 from pathlib import Path
 
 from bus.event_bus import EventBus
 from config import settings
-from view.game_screen import GameScreen
-from view.graphics_renderer import SIDE_PANEL_WIDTH
-from view.img import Img
-from view.local_game_session import LocalGameSession
-from view.network_game_session import NetworkGameSession
-from view.piece_assets import load_all_piece_configs, state_duration_ms
-from view.screen_manager import ScreenManager
-from view.screens.home_screen import HomeScreen
-from view.screens.login_screen import LoginScreen
-from view.session_logging import attach_session_logging
+from client.session.local_game_session import LocalGameSession
+from client.view.app_loop import configure_client_logging, run_app, with_synced_rest_durations
+from client.view.game_screen import GameScreen
+from client.view.graphics_renderer import SIDE_PANEL_WIDTH
+from client.view.screen_manager import ScreenManager
+from client.view.sound import attach_sound
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-WINDOW_NAME = "KungFu Chess"
-DEFAULT_SERVER_URL = "ws://localhost:8765"
 CLIENT_LOG_PATH = PROJECT_ROOT / "logs" / "client.log"
 
 STANDARD_BOARD_TEXT = [
@@ -47,105 +36,31 @@ STANDARD_BOARD_TEXT = [
     "wR wN wB wQ wK wB wN wR",
 ]
 
-# cv2.waitKey's return value (Img.wait_key) when no key was pressed during
-# the frame's delay window.
-NO_KEY = 255
-ESC_KEY = 27
+
+def build_session(events, config, board_lines=None):
+    attach_sound(events)
+    return LocalGameSession(board_lines or STANDARD_BOARD_TEXT, config, events=events)
 
 
-def with_synced_rest_durations(config):
-    """Overrides SHORT_REST_DURATION/LONG_REST_DURATION with the real
-    short_rest/long_rest sprites' own playback duration (frame_count/fps),
-    so the gameplay cooldown always exactly matches how long the rest
-    animation actually plays - taking the max across piece kinds in case a
-    future skin gives them differing lengths (today they're uniform).
-
-    Copies every field from `config` (not a fixed whitelist) so any new
-    config field added later reaches the GUI automatically, instead of
-    silently being missing until someone remembers to list it here too.
-    """
-    pieces_root = PROJECT_ROOT / config.ASSETS_DIR / "pieces"
-    piece_configs = load_all_piece_configs(pieces_root)
-    short = max(state_duration_ms(cfgs["short_rest"]) for cfgs in piece_configs.values())
-    long_ = max(state_duration_ms(cfgs["long_rest"]) for cfgs in piece_configs.values())
-    overrides = {**vars(config), "SHORT_REST_DURATION": short, "LONG_REST_DURATION": long_}
-    return types.SimpleNamespace(**overrides)
-
-
-def build_session(mode, events, config, board_lines=None, server_url=DEFAULT_SERVER_URL):
-    if mode == "local":
-        return LocalGameSession(board_lines or STANDARD_BOARD_TEXT, config, events=events)
-    if mode == "network":
-        return NetworkGameSession(server_url, events)
-    raise ValueError(f"Unknown mode: {mode!r} (expected 'local' or 'network')")
-
-
-def build_screens(events, config, session, mode):
-    """Wires every known screen into a ScreenManager. "local" mode (no
-    server, "Play Offline") starts straight on GAME - there's no one to
-    log in to, let alone matchmake or room with. "network" mode starts on
-    LOGIN: a successful LOGIN moves on to HOME ("login" event) - it only
-    authenticates, it doesn't put anyone in a room - and HOME's "Play"
-    button (server.matchmaking) or its "Room" dialog's Create/Join
-    (view/screens/room_dialog.py) both only reach GAME once the server
-    actually seats this connection somewhere - PLAY's match and ROOM
-    CREATE/JOIN end up publishing the exact same "room" event (server.room.
-    Room), so one transition covers both. Every one of these transitions
-    is ScreenManager's own `transitions=` wiring, not an if/else here or
-    in run_gui's loop.
-    """
-    initial = "GAME" if mode == "local" else "LOGIN"
-    manager = ScreenManager(events, initial=initial)
+def build_screens(events, config, session):
+    """No one to log in to, let alone matchmake or room with - the board
+    is the only screen this path ever shows."""
+    manager = ScreenManager(events, initial="GAME")
     manager.register("GAME", GameScreen(config, session, events, board_x_offset=SIDE_PANEL_WIDTH))
-    if mode == "network":
-        manager.register("LOGIN", LoginScreen(session, events), transitions={"login": "HOME"})
-        manager.register("HOME", HomeScreen(session, events), transitions={"room": "GAME"})
     return manager
 
 
-def configure_client_logging(level=logging.INFO):
-    CLIENT_LOG_PATH.parent.mkdir(exist_ok=True)
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=[logging.FileHandler(CLIENT_LOG_PATH, encoding="utf-8")],
-    )
-
-
-def run_gui(mode="local", server_url=DEFAULT_SERVER_URL, board_lines=None, config=settings):
-    configure_client_logging()
-    config = with_synced_rest_durations(config)
+def run_gui(board_lines=None, config=settings, run_app=run_app):
+    # run_app is injectable (defaulting to the real window/render loop) so
+    # this function's own wiring - config sync, session/screen construction
+    # - stays testable with a fake in its place, without ever opening a
+    # real window (see view/app_loop.run_app's own docstring).
+    configure_client_logging(CLIENT_LOG_PATH)
+    config = with_synced_rest_durations(config, PROJECT_ROOT)
     events = EventBus()
-    attach_session_logging(events)
-    session = build_session(mode, events, config, board_lines=board_lines, server_url=server_url)
-    manager = build_screens(events, config, session, mode)
-
-    Img.open_window(WINDOW_NAME)
-    Img.set_mouse_callback(WINDOW_NAME, on_click=manager.handle_click, on_double_click=manager.handle_double_click)
-
-    canvas = Img.create(1, 1)
-    try:
-        while True:
-            # Exactly once per frame, regardless of which screen is
-            # current - see GameSession.tick's own docstring for why this
-            # can't live inside a Screen's render() instead (that's the
-            # bug it replaced: a bus event published while LOGIN or HOME
-            # was current never reached anyone, because nothing was
-            # draining the session's queue).
-            session.tick()
-            manager.render(canvas)
-            canvas.show_frame(WINDOW_NAME)
-
-            key = Img.wait_key(16)
-            if key == ESC_KEY:
-                break
-            if key != NO_KEY:
-                manager.handle_key(key)
-            if not Img.is_window_visible(WINDOW_NAME):
-                break
-    finally:
-        session.close()
-        Img.close_all_windows()
+    session = build_session(events, config, board_lines=board_lines)
+    manager = build_screens(events, config, session)
+    run_app(session, manager)
 
 
 if __name__ == "__main__":  # pragma: no cover

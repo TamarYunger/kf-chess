@@ -32,7 +32,8 @@ class GameSession(ABC):
         latest_snapshot() returns next.
 
         Call exactly once per frame, from the render loop itself
-        (main_gui.py) - never from inside a Screen's own render(). A
+        (view/app_loop.py's run_app) - never from inside a Screen's own
+        render(). A
         Screen has no way to know whether it's the only one that'll be
         shown this session (see the LOGIN/HOME bug this shape replaced:
         when only GAME called this via its own render(), a bus event

@@ -1,5 +1,5 @@
 """NetworkGameSession: a GameSession backed by a WebSocket connection to a
-real server (see view/network_client.py). No GameEngine import here at
+real server (see session/network_client.py). No GameEngine import here at
 all - the server owns every rule; this session only forwards commands and
 decodes whatever it's told.
 """
@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import dataclasses
 
-from view.game_session import GameSession
-from view.network_client import NetworkClient
-from view.notation import square_name
-from view.snapshot_codec import snapshot_from_json
+from board.notation import square_name
+from client.session.game_session import GameSession
+from client.session.network_client import NetworkClient
+from client.session.snapshot_codec import snapshot_from_json
 
 
 class NetworkGameSession(GameSession):
@@ -37,6 +37,7 @@ class NetworkGameSession(GameSession):
         self._client = network_client if network_client is not None else NetworkClient(url)
         self._snapshot = None
         self._pending_start = None  # a cell selected by a first click, awaiting a second
+        self._legal_destinations = frozenset()  # reply to that click's own SELECT, once it arrives
         self._rejection_reason = None
         self._latest_snapshot = None
         self._client.start()
@@ -52,6 +53,7 @@ class NetworkGameSession(GameSession):
             self._handle_click(cell)
         elif command["type"] == "jump":
             self._pending_start = None
+            self._legal_destinations = frozenset()
             self._rejection_reason = None
             self._client.send(f"JUMP {self._square(cell)}")
 
@@ -59,11 +61,17 @@ class NetworkGameSession(GameSession):
         if self._pending_start is None:
             # A first click: matches Controller.click's own behaviour -
             # clears any stale rejection banner, this is a fresh attempt.
+            # The highlight itself arrives asynchronously as a
+            # "legal_destinations" reply (see tick()) - the server, not
+            # this session, decides what's legal, same as an actual MOVE.
             self._rejection_reason = None
             self._pending_start = cell
+            self._legal_destinations = frozenset()
+            self._client.send(f"SELECT {self._square(cell)}")
             return
         start, end = self._pending_start, cell
         self._pending_start = None
+        self._legal_destinations = frozenset()
         if start == end:
             return  # clicking the same cell again just deselects it
         self._client.send(f"MOVE {self._square(start)} {self._square(end)}")
@@ -78,13 +86,25 @@ class NetworkGameSession(GameSession):
                 self._snapshot = snapshot_from_json(message["payload"])
             elif message["type"] == "rejected":
                 self._rejection_reason = message["payload"]["reason"]
+            elif message["type"] == "legal_destinations":
+                self._apply_legal_destinations(message["payload"])
 
         if self._snapshot is None:
             self._latest_snapshot = None
         else:
             self._latest_snapshot = dataclasses.replace(
                 self._snapshot, selected=self._pending_start, rejection_reason=self._rejection_reason,
+                legal_destinations=self._legal_destinations,
             )
+
+    def _apply_legal_destinations(self, payload):
+        # A reply to a SELECT that's since been superseded (a second click
+        # already sent the MOVE, or a new SELECT for a different cell is
+        # already pending) arrives here too late to matter - only apply it
+        # while it still answers the click currently pending.
+        if self._pending_start is None or list(self._pending_start) != payload["start"]:
+            return
+        self._legal_destinations = frozenset(tuple(cell) for cell in payload["destinations"])
 
     def latest_snapshot(self):
         return self._latest_snapshot

@@ -14,11 +14,11 @@ from bus.event_bus import EventBus
 from config import settings
 from server.db import AccountStore
 from server.ws_server import GameServer
-from view.game_screen import GameScreen
-from view.graphics_renderer import SIDE_PANEL_WIDTH
-from view.img import Img
-from view.network_game_session import NetworkGameSession
-from view.screens.login_screen import BUTTON_HEIGHT, BUTTON_WIDTH, BUTTON_X, BUTTON_Y, LoginScreen
+from client.session.network_game_session import NetworkGameSession
+from client.view.game_screen import GameScreen
+from client.view.graphics_renderer import SIDE_PANEL_WIDTH
+from client.view.img import Img
+from client.view.screens.login_screen import BUTTON_HEIGHT, BUTTON_WIDTH, BUTTON_X, BUTTON_Y, LoginScreen
 
 
 async def _wait_until(predicate, timeout=5.0, interval=0.02):
@@ -52,7 +52,7 @@ async def _tick_loop(server):
 
 
 async def _pump(session):
-    """Stands in for main_gui.py's render loop calling session.tick() once
+    """Stands in for view/app_loop.py's run_app calling session.tick() once
     per frame, regardless of which screen is current - these tests drive a
     NetworkGameSession directly rather than through a real render loop, so
     something still has to keep draining its incoming-message queue (and

@@ -1,8 +1,8 @@
 """LocalGameSession: a GameSession backed directly by an in-process
 GameEngine - the "Play Offline" path, no server or network involved at
-all. Deliberately the only file under view/ that imports GameEngine and
-its collaborators; every other view-layer module (GameScreen included)
-only ever sees the GameSession abstraction.
+all. Deliberately the only file under session/ that imports GameEngine and
+its collaborators; every view-layer module (GameScreen included) only
+ever sees the GameSession abstraction, never GameEngine directly.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from realtime.real_time_arbiter import RealTimeArbiter
 from rules.game_conditions import KingCaptureWinCondition, LastRankPromotion
 from rules.rule_engine import RuleEngine
 from rules.rule_registry import build_default_registry
-from view.game_session import GameSession
+from client.session.game_session import GameSession
 
 # Commands reaching this session already carry a board cell - GameScreen
 # resolves window pixels to a cell itself, the one piece of geometry

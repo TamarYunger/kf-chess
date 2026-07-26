@@ -1,6 +1,6 @@
 from board.board import Board
 from game.snapshot import GameSnapshot
-from view.renderer import BoardRenderer
+from client.view.renderer import BoardRenderer
 
 
 def test_from_board_captures_cells_and_dimensions():

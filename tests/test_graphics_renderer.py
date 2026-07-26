@@ -1,9 +1,10 @@
 from board.board import Board
 from config import settings
 from game.models import MoveRecord
+from realtime.models import Arrival
 from rules.reasons import Reason
 from game.snapshot import GameSnapshot
-from view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
+from client.view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
 
 ASSETS_DIR = "assets"
 
@@ -87,6 +88,74 @@ def test_move_history_panel_has_one_column_per_extra_color():
     # on the left, "b" and "g" sharing the right panel), and must still
     # produce a canvas of the expected (board + two fixed side panels) size.
     canvas = renderer.render(snap)
+    board_w = 3 * settings.CELL_SIZE
+    assert canvas.img.shape[:2] == (3 * settings.CELL_SIZE, SIDE_PANEL_WIDTH + board_w + SIDE_PANEL_WIDTH)
+
+
+def test_selected_cell_is_highlighted_with_a_border():
+    renderer = make_renderer()
+    board = Board([["wR", ".", "."], [".", ".", "."], [".", ".", "."]])
+    unselected_snap = GameSnapshot.from_board(board, game_over=False)
+    selected_snap = GameSnapshot.from_board(board, game_over=False, selected=(0, 0))
+
+    unselected_canvas = renderer.render(unselected_snap)
+    selected_canvas = renderer.render(selected_snap)
+
+    board_w = 3 * settings.CELL_SIZE
+    left = SIDE_PANEL_WIDTH
+    assert not (
+        unselected_canvas.img[:, left:left + board_w] == selected_canvas.img[:, left:left + board_w]
+    ).all()
+
+
+def test_resting_piece_gets_a_cooldown_overlay():
+    renderer = make_renderer()
+    board = Board([["wR", "."]])
+    arrival = Arrival(piece="wR", cell=(0, 0), at=0, kind="move")
+    idle_snap = GameSnapshot.from_board(board, game_over=False, clock=1)
+    resting_snap = GameSnapshot.from_board(board, game_over=False, recent_arrivals=(arrival,), clock=1)
+
+    idle_canvas = renderer.render(idle_snap)
+    resting_canvas = renderer.render(resting_snap)
+
+    board_w = 2 * settings.CELL_SIZE
+    left = SIDE_PANEL_WIDTH
+    assert not (
+        idle_canvas.img[:, left:left + board_w] == resting_canvas.img[:, left:left + board_w]
+    ).all()
+
+
+def test_rest_overlay_draws_nothing_once_its_computed_height_rounds_to_zero():
+    # A rest_fraction this close to the cooldown's end is still nonzero
+    # (truthy - render() still calls _draw_rest_overlay for it), but the
+    # pixel height it computes from that tiny fraction rounds down to 0,
+    # so it must bail out instead of blending a zero-height rectangle.
+    from client.view.img import Img
+
+    renderer = make_renderer()
+    canvas = Img.create(settings.CELL_SIZE, settings.CELL_SIZE)
+    before = canvas.img.copy()
+
+    renderer._draw_rest_overlay(canvas, (0, 0), rest_fraction=0.0001)
+
+    assert (canvas.img == before).all()
+
+
+def test_single_color_config_leaves_the_right_panel_empty():
+    # config.COLORS of length 1: _with_side_panels' right_colors is then
+    # empty - _draw_color_panel must just return for it instead of
+    # crashing on a division by zero (len(colors) in its column-width math).
+    import types
+    one_color_config = types.SimpleNamespace(**{
+        **{k: v for k, v in vars(settings).items() if not k.startswith("_")},
+        "COLORS": ("w",),
+    })
+    renderer = GraphicsRenderer(one_color_config, assets_dir=ASSETS_DIR)
+    board = Board([["wR", ".", "."], [".", ".", "."], [".", ".", "."]])
+    snap = GameSnapshot.from_board(board, game_over=False)
+
+    canvas = renderer.render(snap)
+
     board_w = 3 * settings.CELL_SIZE
     assert canvas.img.shape[:2] == (3 * settings.CELL_SIZE, SIDE_PANEL_WIDTH + board_w + SIDE_PANEL_WIDTH)
 

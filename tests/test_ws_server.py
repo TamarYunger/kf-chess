@@ -87,6 +87,41 @@ def test_move_before_joining_any_room_is_rejected():
     run(scenario())
 
 
+def test_malformed_command_replies_with_a_protocol_error():
+    async def scenario():
+        server = make_server()
+        conn = FakeConnection(incoming=["BOGUS"])
+
+        await server.handle_connection(conn)
+
+        error = json.loads(conn.sent[0])
+        assert error == {"type": "error", "payload": {"message": "Unknown command: 'BOGUS'"}}
+
+    run(scenario())
+
+
+class FakeClosedConnection(FakeConnection):
+    """A connection that's already gone by the time something tries to
+    send to it - `_safe_send` must swallow this, not let it propagate and
+    take down whatever loop was sending (mirrors server.room.Room's
+    identical guard)."""
+
+    async def send(self, message):
+        raise websockets.exceptions.ConnectionClosed(None, None)
+
+
+def test_safe_send_swallows_a_send_to_an_already_closed_connection():
+    async def scenario():
+        server = make_server()
+        conn = FakeClosedConnection(incoming=["BOGUS"])
+
+        await server.handle_connection(conn)  # must not raise despite the malformed command
+
+        assert conn not in server._clients
+
+    run(scenario())
+
+
 # -- LOGIN: authentication only, no room -------------------------------------
 
 
@@ -306,6 +341,20 @@ def test_matchmaking_timeout_does_not_fire_early():
 # -- ROOM CREATE / JOIN -------------------------------------------------------
 
 
+def test_new_room_regenerates_its_id_on_a_collision(monkeypatch):
+    # secrets.token_hex(3) is 16M+ combinations - a real collision is not
+    # something a test can wait for, so this forces one: the first id it
+    # returns is already taken, so _generate_room_id must retry.
+    server = make_server()
+    server._rooms["aaaaaa"] = object()
+    ids = iter(["aaaaaa", "bbbbbb"])
+    monkeypatch.setattr("server.ws_server.secrets.token_hex", lambda n: next(ids))
+
+    room = server._new_room()
+
+    assert room.room_id == "bbbbbb"
+
+
 def test_room_create_before_login_is_rejected():
     async def scenario():
         server = make_server()
@@ -383,6 +432,32 @@ def test_third_joiner_becomes_a_viewer():
         assert room.role_of(third) == "viewer"
         room_msg = json.loads(third.sent[-2])
         assert room_msg["payload"]["role"] == "viewer"
+
+    run(scenario())
+
+
+def test_room_join_reconnect_notifies_the_opponent_still_in_the_room():
+    async def scenario():
+        server = make_server()
+        creator, joiner = FakeConnection(), FakeConnection()
+        await server._handle_login(creator, "alice", "pw1")
+        await server._handle_login(joiner, "bob", "pw2")
+        await server._handle_room_create(creator)
+        room_id = server._connection_room[creator]
+        await server._handle_room_join(joiner, room_id)
+        room = server._rooms[room_id]
+
+        await room.handle_disconnect(joiner)
+        joiner.sent.clear()
+        creator.sent.clear()
+
+        reconnected = FakeConnection()
+        await server._handle_login(reconnected, "bob", "pw2")
+        await server._handle_room_join(reconnected, room_id)
+
+        assert room.role_of(reconnected) == settings.COLORS[1]
+        notice = json.loads(creator.sent[-1])
+        assert notice == {"type": "opponent_reconnected", "payload": {"color": settings.COLORS[1]}}
 
     run(scenario())
 
@@ -573,11 +648,17 @@ def test_periodic_tick_broadcasts_state_without_a_new_command():
                 await client.send("MOVE a3 c3")
                 await client.recv()  # snapshot right after the move is accepted (still in flight)
 
+                # Real broadcast traffic now also includes "arrival"/
+                # "game_over" alongside the periodic "snapshot" (see
+                # server/room.py's own pending-events flush) - a real
+                # client just republishes whichever type it gets (see
+                # NetworkGameSession.tick), so this only inspects the
+                # "snapshot" ones, same as it would.
                 landed = False
                 deadline = time.time() + (2 * settings.MOVE_DURATION) / 1000 + 3
                 while time.time() < deadline:
                     message = json.loads(await asyncio.wait_for(client.recv(), timeout=2))
-                    if message["payload"]["cells"][0][2] == "wR":
+                    if message["type"] == "snapshot" and message["payload"]["cells"][0][2] == "wR":
                         landed = True
                         break
                 assert landed

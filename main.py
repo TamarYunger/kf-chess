@@ -16,7 +16,7 @@ from bus.event_bus import EventBus
 from game.engine import GameEngine
 from game.controller import Controller
 from game.presentation_stub import attach_presentation_stub
-from view.renderer import BoardRenderer
+from client.view.renderer import BoardRenderer
 
 
 def run(input_lines, config=settings):

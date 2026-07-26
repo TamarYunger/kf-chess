@@ -30,7 +30,7 @@ class Screen(ABC):
         """A double left click at window pixel (x, y). No-op by default."""
 
     def handle_key(self, key):
-        """A key code from view.img.Img.wait_key. No-op by default."""
+        """A key code from client.view.img.Img.wait_key. No-op by default."""
 
 
 class ScreenManager:

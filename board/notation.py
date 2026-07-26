@@ -1,5 +1,10 @@
-"""Pure helpers turning a MoveRecord into human-readable chess notation.
-
+"""Pure helpers turning a MoveRecord into human-readable chess notation,
+plus square_name/parse_square - the algebraic-square <-> (row, col)
+conversion server/protocol.py needs to parse a wire command. Lives in
+board/, not view/ (which is where it used to sit): server/protocol.py -
+which must stay free of any view/websockets/asyncio import, see its own
+docstring - would otherwise depend on the client's rendering layer just
+to parse a square, backwards from every other dependency in the project.
 Kept separate from GraphicsRenderer (mirrors view/animation.py) so the
 formatting is unit-testable without a canvas, and reusable by any future
 renderer (e.g. a text move log) without duplicating it.

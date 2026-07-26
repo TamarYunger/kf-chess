@@ -139,14 +139,25 @@ class Img:
         img.img = np.full((height, width, len(color)), color, dtype=np.uint8)
         return img
 
-    def show(self):
+    # -- real OS window operations ------------------------------------------
+    # Everything below this point is a thin, direct call into cv2's HighGUI
+    # backend - opening/reading an actual OS window, which needs a real
+    # display and (show()'s cv2.waitKey(0)) can block indefinitely for a
+    # keypress. There is no logic of ours left to unit-test once you're past
+    # "did we call the right cv2 function" - and actually calling these in
+    # an automated suite would pop up real windows (or hang outright),
+    # unlike every method above, which is pure numpy/cv2 image processing
+    # with no window involved at all. Excluded from coverage for the same
+    # reason `if __name__ == "__main__":` blocks are (see .coveragerc).
+
+    def show(self):  # pragma: no cover
         if self.img is None:
             raise ValueError("Image not loaded.")
         cv2.imshow("Image", self.img)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
-    def show_frame(self, window_name):
+    def show_frame(self, window_name):  # pragma: no cover
         """Non-blocking `imshow` for a render loop - unlike `show()`, it
         doesn't wait for a keypress or tear the window down afterwards."""
         if self.img is None:
@@ -154,11 +165,11 @@ class Img:
         cv2.imshow(window_name, self.img)
 
     @staticmethod
-    def open_window(window_name):
+    def open_window(window_name):  # pragma: no cover
         cv2.namedWindow(window_name)
 
     @staticmethod
-    def set_mouse_callback(window_name, on_click=None, on_double_click=None):
+    def set_mouse_callback(window_name, on_click=None, on_double_click=None):  # pragma: no cover
         """Registers `on_click(x, y)` / `on_double_click(x, y)`, translating
         cv2's raw mouse event codes so callers never need to import cv2 to
         wire up mouse handling."""
@@ -170,13 +181,13 @@ class Img:
         cv2.setMouseCallback(window_name, _handler)
 
     @staticmethod
-    def wait_key(delay_ms):
+    def wait_key(delay_ms):  # pragma: no cover
         return cv2.waitKey(delay_ms) & 0xFF
 
     @staticmethod
-    def is_window_visible(window_name):
+    def is_window_visible(window_name):  # pragma: no cover
         return cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) >= 1
 
     @staticmethod
-    def close_all_windows():
+    def close_all_windows():  # pragma: no cover
         cv2.destroyAllWindows()

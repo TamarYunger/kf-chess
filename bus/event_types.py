@@ -1,14 +1,13 @@
-"""Canonical names for every string-tagged message routed through this
-project's EventBus instances (bus/event_bus.py) or GameSession.submit_command
-- so a typo in a name fails fast (ImportError/AttributeError at import time,
-or a NameError from the linter/IDE) instead of silently going unheard. Same
+"""Canonical names for every string-tagged value this project would
+otherwise repeat as a bare literal at several independent call sites - so a
+typo fails fast (ImportError/AttributeError at import time, or a NameError
+from the linter/IDE) instead of silently going unheard or unmatched. Same
 family of problem as server/room.py's `_call_engine` (see its own
 docstring) - a failure mode with no exception and no test failure, just a
-message that never arrives.
+message that never arrives (or a comparison that never matches).
 
-Three unrelated vocabularies share this module - not because they're the
-same mechanism, but because they're the same *kind* of risk (a bare string
-literal repeated at every publish/subscribe call site):
+Four unrelated vocabularies share this module - not because they're the
+same mechanism, but because they're the same *kind* of risk:
 
 1. GameEngine's own domain events (game/engine.py, game/move_history.py) -
    published with real Python payloads (an ArrivalEvent, a plain dict),
@@ -26,11 +25,14 @@ literal repeated at every publish/subscribe call site):
 4. GameScreen -> GameSession.submit_command's UI command "type" values -
    not a bus event at all, but the exact same failure mode (LocalGameSession
    and NetworkGameSession each compare `command["type"]` against a literal).
+5. server/room.py's non-seat connection role ("viewer", carried inside the
+   "room" wire message's own "role" field alongside config.COLORS) -
+   compared independently in client/view/game_screen.py.
 
-Deliberately plain string constants, not an enum - EventBus doesn't care
-about the type, only equality/hashing as a dict key, and every payload
-shape is already documented at its own publish/encode call site; this only
-needs to kill typos, not add a new type.
+Deliberately plain string constants, not an enum - none of these are ever
+iterated or type-checked as a group, only compared/hashed one at a time, and
+every payload shape is already documented at its own publish/encode call
+site; this only needs to kill typos, not add a new type.
 """
 
 # -- GameEngine's own domain events (game/engine.py, game/move_history.py) --
@@ -64,3 +66,7 @@ CONNECTION_ERROR = "connection_error"
 # -- GameScreen -> GameSession.submit_command UI command types --
 CLICK = "click"
 JUMP = "jump"
+
+# -- server/room.py's non-seat connection role (server/protocol.py's "role"
+# wire field is one of config.COLORS, or this) --
+VIEWER = "viewer"

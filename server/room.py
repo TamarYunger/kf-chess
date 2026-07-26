@@ -19,7 +19,7 @@ import logging
 import time
 
 from board.piece import color_of
-from bus.event_types import ARRIVAL, GAME_OVER, RESIGN
+from bus.event_types import ARRIVAL, GAME_OVER, RESIGN, VIEWER
 from server.elo import update_ratings
 from server.protocol import (
     ProtocolError, encode_arrival, encode_error, encode_game_over, encode_legal_destinations,
@@ -110,7 +110,7 @@ class Room:
 
         self._viewers.add(connection)
         logger.info("room %s: %s joined as a viewer", self.room_id, username)
-        return "viewer"
+        return VIEWER
 
     def is_reclaimable(self, username):
         """True if `username` has a disconnect grace period pending on some
@@ -124,7 +124,7 @@ class Room:
         if connection in self._seats:
             return self._seats[connection]
         if connection in self._viewers:
-            return "viewer"
+            return VIEWER
         return None
 
     def _reclaimable_color(self, username):
@@ -147,7 +147,7 @@ class Room:
         sides in the same seat_or_view pair), and gives it the room's
         current state immediately."""
         await self._safe_send(connection, json.dumps(encode_room(self.room_id, role)))
-        if role != "viewer" and not self._started:
+        if role != VIEWER and not self._started:
             await self._safe_send(connection, json.dumps(encode_waiting_for_opponent()))
         await self._safe_send(connection, json.dumps(encode_snapshot(self._engine)))
 

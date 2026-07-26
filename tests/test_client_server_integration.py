@@ -404,6 +404,9 @@ def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
                 assert await _wait_until(alice_sees_the_countdown)
                 assert bob_color in room._disconnected
 
+                resign_seen = []
+                events_a.subscribe("resign", lambda p: resign_seen.append(p))
+
                 # Speed the grace period up instead of sleeping 20s.
                 room._disconnected[bob_color] = time.monotonic() - 1
 
@@ -413,6 +416,10 @@ def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
 
                 assert await _wait_until(alice_sees_game_over)
                 assert room._engine.winner == alice_color
+                # The real wire round-trip for the "resign" broadcast added
+                # alongside "game_over" (server/protocol.py's encode_resign) -
+                # tells alice's client *why* the game ended, not just that it did.
+                assert resign_seen == [{"color": bob_color}]
             finally:
                 session_a.close()
                 session_b.close()

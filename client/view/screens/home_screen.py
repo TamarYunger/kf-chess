@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 
+from bus.event_types import NO_MATCH
 from client.view.button import Button
 from client.view.graphics_renderer import GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GAP, GAME_OVER_TEXT_COLOR
 from client.view.img import Img
@@ -71,7 +72,7 @@ class HomeScreen(Screen):
         self._room_button = Button(
             ROOM_BUTTON_X, ROOM_BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT, ROOM_BUTTON_LABEL, ROOM_BUTTON_COLOR,
         )
-        events.subscribe("no_match", self._on_no_match)
+        events.subscribe(NO_MATCH, self._on_no_match)
 
     def on_enter(self):
         self._searching_since = None

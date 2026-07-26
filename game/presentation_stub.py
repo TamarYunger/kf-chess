@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 
+from bus.event_types import GAME_OVER, GAME_STARTED, MOVE_LOG_UPDATED, SCORE_CHANGED
+
 logger = logging.getLogger(__name__)
 
-_LOGGED_EVENTS = ("game_started", "game_over", "score_changed", "move_log_updated")
+_LOGGED_EVENTS = (GAME_STARTED, GAME_OVER, SCORE_CHANGED, MOVE_LOG_UPDATED)
 
 
 def attach_presentation_stub(events):

@@ -8,6 +8,8 @@ import threading
 import websockets
 import websockets.exceptions
 
+from bus.event_types import CONNECTED, CONNECTION_ERROR, DISCONNECTED
+
 DEFAULT_RECONNECT_DELAY_SECONDS = 2.0
 
 
@@ -119,14 +121,14 @@ class NetworkClient:
                     self._url, open_timeout=self._open_timeout, close_timeout=self._close_timeout,
                 ) as connection:
                     self._connection = connection
-                    self.incoming.put({"type": "connected", "payload": None})
+                    self.incoming.put({"type": CONNECTED, "payload": None})
                     async for raw in connection:
                         self.incoming.put(json.loads(raw))
-                    self.incoming.put({"type": "disconnected", "payload": None})
+                    self.incoming.put({"type": DISCONNECTED, "payload": None})
             except asyncio.CancelledError:
                 raise
             except (OSError, websockets.exceptions.WebSocketException) as error:
-                self.incoming.put({"type": "connection_error", "payload": {"error": str(error)}})
+                self.incoming.put({"type": CONNECTION_ERROR, "payload": {"error": str(error)}})
             finally:
                 self._connection = None
             await asyncio.sleep(self._reconnect_delay)

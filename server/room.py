@@ -19,11 +19,12 @@ import logging
 import time
 
 from board.piece import color_of
+from bus.event_types import ARRIVAL, GAME_OVER, RESIGN
 from server.elo import update_ratings
 from server.protocol import (
     ProtocolError, encode_arrival, encode_error, encode_game_over, encode_legal_destinations,
-    encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected, encode_room,
-    encode_room_started, encode_snapshot, encode_waiting_for_opponent, resolve_cells,
+    encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected, encode_resign,
+    encode_room, encode_room_started, encode_snapshot, encode_waiting_for_opponent, resolve_cells,
 )
 from server.safe_send import safe_send
 
@@ -58,16 +59,25 @@ class Room:
         self._started = len(self._colors) < 2
         self._last_tick = time.monotonic()
         # GameEngine's own events fire synchronously, mid-call, from deep
-        # inside handle_command/tick (see resolve()'s docstring: several
-        # engine methods settle anything already due before doing their own
-        # work) - too early to `await` a network send from. These two
-        # subscribers only ever queue a message; handle_command and tick
-        # are what actually flush the queue, once they're done touching the
-        # engine and can safely await again (see _flush_pending_events).
+        # inside whichever engine method is running (see resolve()'s
+        # docstring: several engine methods settle anything already due
+        # before doing their own work) - too early to `await` a network
+        # send from. These subscribers only ever queue a message;
+        # _call_engine is what actually flushes the queue, right after the
+        # engine call that might have triggered it returns. handle_command
+        # and tick also flush once more before returning, as a backstop -
+        # but every engine call that can settle a motion should go through
+        # _call_engine so a future addition can't forget to flush on its
+        # own (see _call_engine's docstring).
         self._pending_events = []
-        self._engine.events.subscribe("game_over", self._on_game_over)
-        self._engine.events.subscribe("game_over", self._on_game_over_for_clients)
-        self._engine.events.subscribe("arrival", self._on_arrival)
+        self._engine.events.subscribe(GAME_OVER, self._on_game_over)
+        self._engine.events.subscribe(GAME_OVER, self._on_game_over_for_clients)
+        self._engine.events.subscribe(ARRIVAL, self._on_arrival)
+        # Fires (only for an auto-resign - see _resolve_disconnect_timeouts)
+        # right before the "game_over" above, so a client sees this queued
+        # message first - resign() itself publishes "resign" then
+        # "game_over" in that order (see GameEngine.resign's docstring).
+        self._engine.events.subscribe(RESIGN, self._on_resign_for_clients)
 
     @property
     def started(self):
@@ -233,9 +243,9 @@ class Room:
             return
 
         if command.verb == "MOVE":
-            result = self._engine.request_move(cells[0], cells[1])
+            result = await self._call_engine(self._engine.request_move, cells[0], cells[1])
         else:  # JUMP - the only other verb protocol.parse_command accepts here
-            result = self._engine.request_jump(cells[0])
+            result = await self._call_engine(self._engine.request_jump, cells[0])
 
         if not result.is_accepted:
             logger.info("room %s: %s by %s rejected (%s)", self.room_id, command.verb, self._seats[connection], result.reason)
@@ -256,11 +266,10 @@ class Room:
         without the rejection message - this isn't a move attempt)."""
         row, col = cell
         piece = self._engine.snapshot().cells[row][col]
-        destinations = (
-            self._engine.legal_destinations(cell)
-            if piece != "." and color_of(piece) == self._seats[connection]
-            else frozenset()
-        )
+        if piece != "." and color_of(piece) == self._seats[connection]:
+            destinations = await self._call_engine(self._engine.legal_destinations, cell)
+        else:
+            destinations = frozenset()
         await self._safe_send(connection, json.dumps(encode_legal_destinations(cell, destinations)))
 
     async def handle_disconnect(self, connection):
@@ -276,7 +285,7 @@ class Room:
     async def tick(self, now):
         dt_ms = int((now - self._last_tick) * 1000)
         self._last_tick = now
-        self._engine.wait(dt_ms)
+        await self._call_engine(self._engine.wait, dt_ms)
         await self._resolve_disconnect_timeouts(now)
         await self._flush_pending_events()
         await self.broadcast()
@@ -286,7 +295,8 @@ class Room:
             if now >= deadline:
                 del self._disconnected[color]
                 logger.info("room %s: %s auto-resigning (no reconnect)", self.room_id, color)
-                self._engine.resign(color)  # publishes "resign" then "game_over" - see _on_game_over
+                # publishes "resign" then "game_over" - see _on_game_over
+                await self._call_engine(self._engine.resign, color)
 
     def _on_game_over(self, payload):
         """Updates both seated players' Elo ratings once GameEngine reports
@@ -319,6 +329,22 @@ class Room:
 
     def _on_game_over_for_clients(self, payload):
         self._pending_events.append(encode_game_over(payload.get("winner")))
+
+    def _on_resign_for_clients(self, payload):
+        self._pending_events.append(encode_resign(payload["color"]))
+
+    async def _call_engine(self, method, *args):
+        """Call an engine method that may settle a pending motion (i.e.
+        anything but a plain read like `snapshot()`) and immediately flush
+        whatever that triggered - so flushing lives right next to the call
+        that can need it, instead of depending on whichever caller further
+        up remembers to do it separately. Every new Room method that needs
+        to invoke a mutating GameEngine method should go through here
+        (`await self._call_engine(self._engine.some_method, ...)`) rather
+        than calling `self._engine.some_method(...)` directly."""
+        result = method(*args)
+        await self._flush_pending_events()
+        return result
 
     async def _flush_pending_events(self):
         pending, self._pending_events = self._pending_events, []

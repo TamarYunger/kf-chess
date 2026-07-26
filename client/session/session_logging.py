@@ -12,14 +12,19 @@ from __future__ import annotations
 
 import logging
 
+from bus.event_types import (
+    CONNECTED, CONNECTION_ERROR, DISCONNECTED, ERROR, LOGIN, LOGIN_REJECTED, NO_MATCH,
+    OPPONENT_DISCONNECTED, OPPONENT_RECONNECTED, REJECTED, RESIGN, ROOM,
+)
+
 logger = logging.getLogger(__name__)
 
 _LOGGED_EVENTS = (
-    "connected", "disconnected", "connection_error",
-    "login", "login_rejected",
-    "room", "no_match",
-    "opponent_disconnected", "opponent_reconnected",
-    "resign", "rejected", "error",
+    CONNECTED, DISCONNECTED, CONNECTION_ERROR,
+    LOGIN, LOGIN_REJECTED,
+    ROOM, NO_MATCH,
+    OPPONENT_DISCONNECTED, OPPONENT_RECONNECTED,
+    RESIGN, REJECTED, ERROR,
 )
 
 

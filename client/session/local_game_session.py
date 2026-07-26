@@ -11,6 +11,7 @@ import time
 
 from board.loaders import load_text_board
 from bus.event_bus import EventBus
+from bus.event_types import CLICK, JUMP
 from game.board_mapper import BoardMapper
 from game.controller import Controller
 from game.engine import GameEngine
@@ -58,9 +59,9 @@ class LocalGameSession(GameSession):
 
     def submit_command(self, command):
         row, col = command["cell"]
-        if command["type"] == "click":
+        if command["type"] == CLICK:
             self._controller.click(col, row)
-        elif command["type"] == "jump":
+        elif command["type"] == JUMP:
             self._controller.jump(col, row)
 
     def tick(self):

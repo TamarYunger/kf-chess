@@ -9,7 +9,7 @@ from rules.rule_registry import build_default_registry
 from game.engine import GameEngine
 from server.protocol import (
     Command, ProtocolError, encode_arrival, encode_error, encode_game_over, encode_login, encode_login_rejected,
-    encode_no_match, encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected,
+    encode_no_match, encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected, encode_resign,
     encode_room, encode_room_started, encode_snapshot, encode_waiting_for_opponent, parse_command, resolve_cells,
 )
 from client.session.snapshot_codec import snapshot_from_json
@@ -221,3 +221,7 @@ def test_encode_arrival_shape_for_a_non_capturing_move():
 
 def test_encode_game_over_shape():
     assert encode_game_over("w") == {"type": "game_over", "payload": {"winner": "w"}}
+
+
+def test_encode_resign_shape():
+    assert encode_resign("w") == {"type": "resign", "payload": {"color": "w"}}

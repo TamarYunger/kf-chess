@@ -30,6 +30,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from bus.event_types import ARRIVAL, GAME_OVER
+
 SOUNDS_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "sounds"
 
 MOVE_SOUND = "move.wav"
@@ -52,9 +54,9 @@ def attach_sound(events, sounds_dir=SOUNDS_DIR, play=None):
     play = play if play is not None else _play
     sounds_dir = Path(sounds_dir)
     events.subscribe(
-        "arrival", lambda payload: play(sounds_dir / (CAPTURE_SOUND if _captured_of(payload) is not None else MOVE_SOUND))
+        ARRIVAL, lambda payload: play(sounds_dir / (CAPTURE_SOUND if _captured_of(payload) is not None else MOVE_SOUND))
     )
-    events.subscribe("game_over", lambda payload: play(sounds_dir / GAME_OVER_SOUND))
+    events.subscribe(GAME_OVER, lambda payload: play(sounds_dir / GAME_OVER_SOUND))
 
 
 def _captured_of(payload):

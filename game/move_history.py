@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 
 from board.piece import color_of, kind_of
+from bus.event_types import ARRIVAL, MOVE_ACCEPTED, MOVE_LOG_UPDATED
 from game.models import MoveRecord
 
 
@@ -29,8 +30,8 @@ class MoveHistory:
 
     def subscribe_to(self, events):
         self._events = events
-        events.subscribe("move_accepted", self._on_move_accepted)
-        events.subscribe("arrival", self._on_arrival)
+        events.subscribe(MOVE_ACCEPTED, self._on_move_accepted)
+        events.subscribe(ARRIVAL, self._on_arrival)
 
     def snapshot(self):
         return {color: tuple(moves) for color, moves in self._records.items()}
@@ -57,4 +58,4 @@ class MoveHistory:
                 break
 
     def _publish_updated(self):
-        self._events.publish("move_log_updated", self.snapshot())
+        self._events.publish(MOVE_LOG_UPDATED, self.snapshot())

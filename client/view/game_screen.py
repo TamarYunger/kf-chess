@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import time
 
+from bus.event_types import (
+    CLICK, JUMP, OPPONENT_DISCONNECTED, OPPONENT_RECONNECTED, ROOM, ROOM_STARTED, WAITING_FOR_OPPONENT,
+)
 from client.view.graphics_renderer import GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GAP, GAME_OVER_TEXT_COLOR
 from client.view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
 from client.view.img import Img
@@ -67,11 +70,11 @@ class GameScreen(Screen):
         self._room_id = None
         self._role = None  # a color (seated) or "viewer"; None outside a room (e.g. local play)
         self._waiting_for_opponent = False  # a fresh ROOM CREATE's creator, alone until someone joins
-        events.subscribe("opponent_disconnected", self._on_opponent_disconnected)
-        events.subscribe("opponent_reconnected", self._on_opponent_reconnected)
-        events.subscribe("room", self._on_room)
-        events.subscribe("waiting_for_opponent", self._on_waiting_for_opponent)
-        events.subscribe("room_started", self._on_room_started)
+        events.subscribe(OPPONENT_DISCONNECTED, self._on_opponent_disconnected)
+        events.subscribe(OPPONENT_RECONNECTED, self._on_opponent_reconnected)
+        events.subscribe(ROOM, self._on_room)
+        events.subscribe(WAITING_FOR_OPPONENT, self._on_waiting_for_opponent)
+        events.subscribe(ROOM_STARTED, self._on_room_started)
 
     def render(self, canvas):
         # A pure read - view/app_loop.py's run_app is what calls
@@ -98,14 +101,14 @@ class GameScreen(Screen):
             return  # nothing to move yet - see server/room.py's own rejection too
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
-            self._session.submit_command({"type": "click", "cell": cell})
+            self._session.submit_command({"type": CLICK, "cell": cell})
 
     def handle_double_click(self, x, y):
         if self._role == "viewer" or self._waiting_for_opponent:
             return
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
-            self._session.submit_command({"type": "jump", "cell": cell})
+            self._session.submit_command({"type": JUMP, "cell": cell})
 
     def _pixel_to_cell(self, x, y):
         if self._last_snapshot is None:

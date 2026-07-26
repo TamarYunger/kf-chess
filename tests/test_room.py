@@ -402,6 +402,28 @@ def test_tick_advances_the_clock_and_resolves_an_expired_disconnect_into_a_resig
     run(scenario())
 
 
+def test_tick_broadcasts_a_resign_message_before_game_over_for_an_auto_resign():
+    async def scenario():
+        room, engine = make_room(["wK . .", ". . .", "bK . ."])
+        alice = FakeConnection()
+        bob = FakeConnection()
+        role_alice = room.seat_or_view(alice, "alice", 1200)
+        role_bob = room.seat_or_view(bob, "bob", 1200)
+        await room.handle_disconnect(alice)
+        room._disconnected[role_alice] = time.monotonic() - 1  # already expired
+
+        await room.tick(time.monotonic())
+
+        messages = [json.loads(m) for m in bob.sent]
+        resign_index = next(i for i, m in enumerate(messages) if m["type"] == "resign")
+        game_over_index = next(i for i, m in enumerate(messages) if m["type"] == "game_over")
+        assert messages[resign_index]["payload"] == {"color": role_alice}
+        assert messages[game_over_index]["payload"] == {"winner": role_bob}
+        assert resign_index < game_over_index  # a client sees why before the outcome
+
+    run(scenario())
+
+
 def test_game_over_updates_both_ratings_via_the_shared_events_bus():
     async def scenario():
         events = EventBus()

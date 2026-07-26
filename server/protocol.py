@@ -82,12 +82,24 @@ Server -> client (JSON-encoded):
           also already reflected in every subsequent snapshot's own
           game_over/winner fields, but this is the one-time edge a reactive
           client (again, view.sound) needs instead of polling those
+    {"type": "resign", "payload": {"color": str}}
+        - broadcast right before that same "game_over", only when the game
+          ended via `color` running out its disconnect grace period
+          (server/room.py's auto-resign) rather than a capture - lets a
+          client (or session_logging's audit trail) tell the two apart;
+          "game_over" alone can't, since a capture also just reports a
+          winner
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from board.notation import parse_square
+from bus.event_types import (
+    ARRIVAL, ERROR, GAME_OVER, LEGAL_DESTINATIONS, LOGIN, LOGIN_REJECTED, NO_MATCH,
+    OPPONENT_DISCONNECTED, OPPONENT_RECONNECTED, REJECTED, RESIGN, ROOM, ROOM_STARTED, SNAPSHOT,
+    WAITING_FOR_OPPONENT,
+)
 
 _ARITY = {"MOVE": 2, "JUMP": 1, "SELECT": 1, "LOGIN": 2, "PLAY": 0}
 _ROOM_SUBCOMMANDS = {"CREATE": 0, "JOIN": 1}
@@ -173,7 +185,7 @@ def encode_snapshot(engine):
     """
     snapshot = engine.snapshot()
     return {
-        "type": "snapshot",
+        "type": SNAPSHOT,
         "payload": {
             "cells": [list(row) for row in snapshot.cells],
             "width": snapshot.width,
@@ -222,46 +234,46 @@ def encode_snapshot(engine):
 
 
 def encode_error(message):
-    return {"type": "error", "payload": {"message": message}}
+    return {"type": ERROR, "payload": {"message": message}}
 
 
 def encode_rejected(reason):
     # Reason subclasses str (see rules.reasons), so it serializes as its
     # plain value ("busy_source") once json.dumps'd - not str(reason),
     # which would instead give Enum's own "Reason.BUSY_SOURCE".
-    return {"type": "rejected", "payload": {"reason": reason}}
+    return {"type": REJECTED, "payload": {"reason": reason}}
 
 
 def encode_login(username, rating):
-    return {"type": "login", "payload": {"username": username, "rating": rating}}
+    return {"type": LOGIN, "payload": {"username": username, "rating": rating}}
 
 
 def encode_login_rejected(message):
-    return {"type": "login_rejected", "payload": {"message": message}}
+    return {"type": LOGIN_REJECTED, "payload": {"message": message}}
 
 
 def encode_room(room_id, role):
-    return {"type": "room", "payload": {"room_id": room_id, "role": role}}
+    return {"type": ROOM, "payload": {"room_id": room_id, "role": role}}
 
 
 def encode_no_match():
-    return {"type": "no_match", "payload": None}
+    return {"type": NO_MATCH, "payload": None}
 
 
 def encode_opponent_disconnected(color, grace_period_seconds):
     return {
-        "type": "opponent_disconnected",
+        "type": OPPONENT_DISCONNECTED,
         "payload": {"color": color, "grace_period_seconds": grace_period_seconds},
     }
 
 
 def encode_opponent_reconnected(color):
-    return {"type": "opponent_reconnected", "payload": {"color": color}}
+    return {"type": OPPONENT_RECONNECTED, "payload": {"color": color}}
 
 
 def encode_legal_destinations(start, destinations):
     return {
-        "type": "legal_destinations",
+        "type": LEGAL_DESTINATIONS,
         "payload": {"start": list(start), "destinations": [list(cell) for cell in sorted(destinations)]},
     }
 
@@ -270,22 +282,26 @@ def encode_waiting_for_opponent():
     # Sent once, right after a ROOM CREATE, only to the creator, and only
     # if no one else is seated yet - PLAY's matchmaking always seats both
     # sides at once, so a PLAY-matched room never sends this.
-    return {"type": "waiting_for_opponent", "payload": None}
+    return {"type": WAITING_FOR_OPPONENT, "payload": None}
 
 
 def encode_room_started():
     # Broadcast once, exactly when a room's second seat is filled for the
     # first time - clears whatever "waiting" state the creator's client
     # is showing.
-    return {"type": "room_started", "payload": None}
+    return {"type": ROOM_STARTED, "payload": None}
 
 
 def encode_arrival(event):
     return {
-        "type": "arrival",
+        "type": ARRIVAL,
         "payload": {"piece": event.piece, "destination": list(event.destination), "captured": event.captured},
     }
 
 
 def encode_game_over(winner):
-    return {"type": "game_over", "payload": {"winner": winner}}
+    return {"type": GAME_OVER, "payload": {"winner": winner}}
+
+
+def encode_resign(color):
+    return {"type": RESIGN, "payload": {"color": color}}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bus.event_types import LOGIN_REJECTED
 from client.view.button import Button
 from client.view.graphics_renderer import (
     REJECTION_BAR_ALPHA, REJECTION_BAR_COLOR, REJECTION_FONT_SCALE, REJECTION_PADDING,
@@ -56,7 +57,7 @@ class LoginScreen(Screen):
         )
         self._error_message = None
         self._button = Button(BUTTON_X, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT, BUTTON_LABEL, BUTTON_COLOR)
-        events.subscribe("login_rejected", self._on_login_rejected)
+        events.subscribe(LOGIN_REJECTED, self._on_login_rejected)
 
     def on_enter(self):
         self._username_field.clear()

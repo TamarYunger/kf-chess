@@ -1,5 +1,6 @@
 from board.piece import color_of, kind_of
 from bus.event_bus import EventBus
+from bus.event_types import ARRIVAL, GAME_OVER, GAME_STARTED, MOVE_ACCEPTED, RESIGN, SCORE_CHANGED
 from game.models import MoveResult
 from game.move_history import MoveHistory
 from game.snapshot import GameSnapshot
@@ -33,7 +34,7 @@ class GameEngine:
         self._move_history = MoveHistory(config.COLORS)
         self._move_history.subscribe_to(self._events)
         self._score = {color: 0 for color in config.COLORS}
-        self._events.publish("game_started", {"colors": tuple(config.COLORS)})
+        self._events.publish(GAME_STARTED, {"colors": tuple(config.COLORS)})
 
     @property
     def events(self):
@@ -142,7 +143,7 @@ class GameEngine:
             return MoveResult(False, Reason.DESTINATION_CONTESTED)
 
         self._arbiter.start_move(piece, start, end)
-        self._events.publish("move_accepted", {"piece": piece, "start": start, "end": end})
+        self._events.publish(MOVE_ACCEPTED, {"piece": piece, "start": start, "end": end})
         return MoveResult(True, Reason.OK)
 
     def request_jump(self, cell):
@@ -176,8 +177,8 @@ class GameEngine:
             return
         self._game_over = True
         self._winner = next(c for c in self._config.COLORS if c != color)
-        self._events.publish("resign", {"color": color})
-        self._events.publish("game_over", {"winner": self._winner})
+        self._events.publish(RESIGN, {"color": color})
+        self._events.publish(GAME_OVER, {"winner": self._winner})
 
     def wait(self, dt):
         self._apply_events(self._arbiter.advance_time(dt))
@@ -211,16 +212,16 @@ class GameEngine:
         later event in the same batch silently overwrite `_winner`.
         """
         for event in events:
-            self._events.publish("arrival", event)
+            self._events.publish(ARRIVAL, event)
             if event.captured is not None:
                 capturer_color = color_of(event.piece)
                 self._score[capturer_color] += self._config.PIECE_VALUES[kind_of(event.captured)]
                 self._events.publish(
-                    "score_changed", {"color": capturer_color, "score": self._score[capturer_color]}
+                    SCORE_CHANGED, {"color": capturer_color, "score": self._score[capturer_color]}
                 )
             if self._win_condition.is_game_over(event.captured):
                 self._game_over = True
                 captured_color = color_of(event.captured)
                 self._winner = next(c for c in self._config.COLORS if c != captured_color)
-                self._events.publish("game_over", {"winner": self._winner})
+                self._events.publish(GAME_OVER, {"winner": self._winner})
                 break

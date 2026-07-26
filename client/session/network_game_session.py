@@ -8,6 +8,7 @@ from __future__ import annotations
 import dataclasses
 
 from board.notation import square_name
+from bus.event_types import CLICK, JUMP, LEGAL_DESTINATIONS, REJECTED, SNAPSHOT
 from client.session.game_session import GameSession
 from client.session.network_client import NetworkClient
 from client.session.snapshot_codec import snapshot_from_json
@@ -49,9 +50,9 @@ class NetworkGameSession(GameSession):
         if self._snapshot is None:
             return  # no board height known yet to turn a cell into a square
         cell = tuple(command["cell"])
-        if command["type"] == "click":
+        if command["type"] == CLICK:
             self._handle_click(cell)
-        elif command["type"] == "jump":
+        elif command["type"] == JUMP:
             self._pending_start = None
             self._legal_destinations = frozenset()
             self._rejection_reason = None
@@ -82,11 +83,11 @@ class NetworkGameSession(GameSession):
     def tick(self):
         for message in self._client.drain():
             self._events.publish(message["type"], message.get("payload"))
-            if message["type"] == "snapshot":
+            if message["type"] == SNAPSHOT:
                 self._snapshot = snapshot_from_json(message["payload"])
-            elif message["type"] == "rejected":
+            elif message["type"] == REJECTED:
                 self._rejection_reason = message["payload"]["reason"]
-            elif message["type"] == "legal_destinations":
+            elif message["type"] == LEGAL_DESTINATIONS:
                 self._apply_legal_destinations(message["payload"])
 
         if self._snapshot is None:

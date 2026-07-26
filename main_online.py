@@ -14,6 +14,7 @@ session/network_client.py.
 from pathlib import Path
 
 from bus.event_bus import EventBus
+from bus.event_types import LOGIN, ROOM
 from config import settings
 from client.session.network_game_session import NetworkGameSession
 from client.session.session_logging import attach_session_logging
@@ -48,8 +49,8 @@ def build_screens(events, config, session):
     """
     manager = ScreenManager(events, initial="LOGIN")
     manager.register("GAME", GameScreen(config, session, events, board_x_offset=SIDE_PANEL_WIDTH))
-    manager.register("LOGIN", LoginScreen(session, events), transitions={"login": "HOME"})
-    manager.register("HOME", HomeScreen(session, events), transitions={"room": "GAME"})
+    manager.register("LOGIN", LoginScreen(session, events), transitions={LOGIN: "HOME"})
+    manager.register("HOME", HomeScreen(session, events), transitions={ROOM: "GAME"})
     return manager
 
 

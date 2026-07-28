@@ -107,23 +107,18 @@ def test_encode_rejected_serializes_the_reason_as_its_plain_value():
     assert message == {"type": "rejected", "payload": {"reason": "busy_source"}}
 
 
-def test_parse_command_login():
-    assert parse_command("LOGIN alice hunter2") == Command("LOGIN", ("alice", "hunter2"))
+def test_parse_command_auth():
+    assert parse_command("AUTH 9f3c2b1a") == Command("AUTH", ("9f3c2b1a",))
 
 
-def test_parse_command_login_rejects_a_missing_password():
+def test_parse_command_auth_rejects_a_missing_token():
     with pytest.raises(ProtocolError):
-        parse_command("LOGIN alice")
+        parse_command("AUTH")
 
 
-def test_parse_command_login_rejects_a_missing_username_and_password():
+def test_parse_command_auth_rejects_more_than_one_argument():
     with pytest.raises(ProtocolError):
-        parse_command("LOGIN")
-
-
-def test_parse_command_login_rejects_more_than_two_arguments():
-    with pytest.raises(ProtocolError):
-        parse_command("LOGIN alice hunter2 extra")
+        parse_command("AUTH 9f3c2b1a extra")
 
 
 def test_encode_login_shape():

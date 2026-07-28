@@ -109,7 +109,7 @@ def test_typing_both_fields_and_clicking_login_submits_username_and_password():
 
     screen.handle_click(*button_center())
 
-    assert session.commands == ["LOGIN alice hunter2"]
+    assert session.commands == [{"type": "login", "username": "alice", "password": "hunter2"}]
 
 
 def test_pressing_enter_in_the_password_field_submits():
@@ -117,7 +117,7 @@ def test_pressing_enter_in_the_password_field_submits():
 
     login_via_fields(screen, "bob", "secret123")
 
-    assert session.commands == ["LOGIN bob secret123"]
+    assert session.commands == [{"type": "login", "username": "bob", "password": "secret123"}]
 
 
 def test_clicking_login_with_an_empty_username_submits_nothing():

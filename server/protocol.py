@@ -13,21 +13,23 @@ Client -> server (one command per text message):
                                           right now" (see legal_destinations
                                           below) - not a move itself, so it
                                           is never rejected/logged as one
-    "LOGIN <username> <password>"        e.g. "LOGIN alice hunter2"
+    "AUTH <token>"                        e.g. "AUTH 9f3c2b1a..."
     "PLAY"                                - join the matchmaking queue
     "ROOM CREATE"                         - create a new room, seated first
     "ROOM JOIN <room-id>"                 - join an existing room
 Squares are algebraic notation (board.notation.square_name/parse_square) -
 letter file, then rank counting up from the bottom row - so a command
 never depends on window pixels or a particular board size beyond the
-board's own height. LOGIN's arguments are a plain username/password, not
-squares - see resolve_cells vs. Command.args directly. A username seen
-for the first time is registered with that password (server.db); an
-existing one is authenticated against it. LOGIN only authenticates -
-it does NOT seat a color; PLAY (matched against another PLAY-ing
-connection within server.matchmaking's rating range) or ROOM CREATE/JOIN
-is what does that, so a player can be logged in (browsing HOME) without
-occupying a game seat. Both paths end up in the exact same place - a
+board's own height. AUTH's argument is an opaque token, not a square -
+see resolve_cells vs. Command.args directly. The token itself was issued
+by server.api_gateway's POST /login (which is what actually checks a
+username/password against server.db) and looked up here against Redis,
+not authenticated locally - this module/this server no longer sees a
+password at all. AUTH only authenticates - it does NOT seat a color;
+PLAY (matched against another PLAY-ing connection within
+server.matchmaking's rating range) or ROOM CREATE/JOIN is what does
+that, so a player can be logged in (browsing HOME) without occupying a
+game seat. Both paths end up in the exact same place - a
 server.room.Room - PLAY just creates one automatically instead of the
 player picking an id (see server/ws_server.py); a room's third-and-later
 joiner becomes a viewer instead of a third seat.
@@ -45,9 +47,10 @@ Server -> client (JSON-encoded):
     {"type": "rejected", "payload": {"reason": str}}    - legal command,
         refused by GameEngine (Reason.* from rules.reasons)
     {"type": "login", "payload": {"username": str, "rating": int}}
-        - LOGIN accepted; no room/color yet - see PLAY/ROOM
+        - AUTH accepted (a valid, unexpired token - see server/api_gateway.py);
+          no room/color yet - see PLAY/ROOM
     {"type": "login_rejected", "payload": {"message": str}}
-        - LOGIN refused (wrong password)
+        - AUTH refused (invalid/expired/already-used token)
     {"type": "room", "payload": {"room_id": str, "role": str}}
         - this connection is now part of room_id, as `role` - one of
           config.COLORS ("w"/"b") if seated, or "viewer". Sent once, right
@@ -59,8 +62,9 @@ Server -> client (JSON-encoded):
           with no compatible opponent found
     {"type": "opponent_disconnected", "payload": {"color": str, "grace_period_seconds": int}}
         - the player seated as `color` dropped connection; they have
-          `grace_period_seconds` to reconnect (re-LOGIN, then rejoin the
-          same room with the same username) before auto-resigning
+          `grace_period_seconds` to reconnect (a fresh REST /login, then
+          AUTH with the new token, then rejoin the same room with the
+          same username) before auto-resigning
     {"type": "opponent_reconnected", "payload": {"color": str}}
         - `color` reconnected within the grace period; the countdown is
           cancelled
@@ -101,7 +105,7 @@ from bus.event_types import (
     WAITING_FOR_OPPONENT,
 )
 
-_ARITY = {"MOVE": 2, "JUMP": 1, "SELECT": 1, "LOGIN": 2, "PLAY": 0}
+_ARITY = {"MOVE": 2, "JUMP": 1, "SELECT": 1, "AUTH": 1, "PLAY": 0}
 _ROOM_SUBCOMMANDS = {"CREATE": 0, "JOIN": 1}
 
 
@@ -121,8 +125,8 @@ class Command:
 def parse_command(line):
     """"MOVE e2 e4" -> Command("MOVE", ("e2", "e4")). Args are left as text
     here - turning a MOVE/JUMP arg into a (row, col) needs the board's
-    height, which this module doesn't have; see resolve_cells. LOGIN's args
-    need no further resolution - use command.args[0]/[1] directly.
+    height, which this module doesn't have; see resolve_cells. AUTH's arg
+    needs no further resolution - use command.args[0] directly.
 
     "ROOM ..." is special-cased: its second word (CREATE/JOIN) picks the
     actual verb ("ROOM_CREATE"/"ROOM_JOIN") and that verb's own arity, the
@@ -167,7 +171,7 @@ def resolve_cells(command, board_height):
     """A MOVE/JUMP Command's raw algebraic squares -> a tuple of (row, col)
     cells. Kept separate from parse_command because it needs board_height,
     which the wire format itself has no business knowing. Not meaningful
-    for LOGIN - its args are a username/password, not squares."""
+    for AUTH - its arg is an opaque token, not a square."""
     try:
         return tuple(parse_square(square, board_height) for square in command.args)
     except ValueError as error:

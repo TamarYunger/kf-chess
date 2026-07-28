@@ -33,10 +33,14 @@ class LoginScreen(Screen):
     TextInputs (the password field hidden - see TextInput's own `hidden`
     mode), one drawn (not native - see view/button.py) "Login" button.
 
-    Submitting sends "LOGIN <username> <password>" through the session and
-    otherwise does nothing itself - ScreenManager's own bus-driven
-    transitions (see main_online.py's build_screens: transitions={"login":
-    "GAME"}) are what move on to the board once the server confirms a seat,
+    Submitting sends {"type": "login", "username": ..., "password": ...}
+    through the session and otherwise does nothing itself - the session
+    is what actually turns that into a REST call to the API Gateway and
+    then an AUTH over the WebSocket (see NetworkGameSession.submit_command/
+    tick) - this screen doesn't know or care that split happens.
+    ScreenManager's own bus-driven transitions (see main_online.py's
+    build_screens: transitions={"login": "GAME"}) are what move on to the
+    board once the server confirms a seat,
     so this screen never needs to know what screen comes after it. Its
     only other job is showing a rejection (wrong password, room full, ...)
     if one arrives instead - styled after GraphicsRenderer's existing
@@ -110,7 +114,7 @@ class LoginScreen(Screen):
         if not username or not password:
             return
         self._error_message = None
-        self._session.submit_command(f"LOGIN {username} {password}")
+        self._session.submit_command({"type": "login", "username": username, "password": password})
 
     def _on_login_rejected(self, payload):
         self._error_message = payload.get("message", "Login rejected")

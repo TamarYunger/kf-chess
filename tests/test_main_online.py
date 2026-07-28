@@ -7,7 +7,7 @@ from client.view.screens.login_screen import LoginScreen
 
 def test_build_session_returns_a_network_session_without_connecting_yet():
     events = EventBus()
-    session = build_session(events, server_url="ws://127.0.0.1:1")
+    session = build_session(events, server_url="ws://127.0.0.1:1", api_gateway_url="http://127.0.0.1:1")
 
     try:
         assert isinstance(session, NetworkGameSession)
@@ -20,7 +20,7 @@ def test_build_session_returns_a_network_session_without_connecting_yet():
 
 def test_build_screens_starts_on_login():
     events = EventBus()
-    session = build_session(events, server_url="ws://127.0.0.1:1")
+    session = build_session(events, server_url="ws://127.0.0.1:1", api_gateway_url="http://127.0.0.1:1")
 
     try:
         manager = build_screens(events, settings, session)
@@ -36,7 +36,7 @@ def test_build_screens_moves_to_home_once_the_bus_reports_a_login():
     # authenticates - it doesn't seat a color - so it lands on HOME, not
     # straight into GAME.
     events = EventBus()
-    session = build_session(events, server_url="ws://127.0.0.1:1")
+    session = build_session(events, server_url="ws://127.0.0.1:1", api_gateway_url="http://127.0.0.1:1")
 
     try:
         manager = build_screens(events, settings, session)
@@ -51,7 +51,7 @@ def test_build_screens_moves_to_game_once_the_bus_reports_a_room():
     # PLAY's match and ROOM CREATE/JOIN both end up publishing the same
     # "room" event - one transition covers both.
     events = EventBus()
-    session = build_session(events, server_url="ws://127.0.0.1:1")
+    session = build_session(events, server_url="ws://127.0.0.1:1", api_gateway_url="http://127.0.0.1:1")
 
     try:
         manager = build_screens(events, settings, session)
@@ -74,7 +74,7 @@ def test_run_gui_wires_a_network_session_into_the_injected_run_app():
         received["manager"] = manager
         session.close()
 
-    run_gui(server_url="ws://127.0.0.1:1", run_app=fake_run_app)
+    run_gui(server_url="ws://127.0.0.1:1", api_gateway_url="http://127.0.0.1:1", run_app=fake_run_app)
 
     assert isinstance(received["session"], NetworkGameSession)
     assert received["manager"].current_name == "LOGIN"

@@ -28,12 +28,13 @@ from client.view.sound import attach_sound
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_SERVER_URL = "ws://localhost:8765"
+DEFAULT_API_GATEWAY_URL = "http://localhost:8080"
 CLIENT_LOG_PATH = PROJECT_ROOT / "logs" / "client.log"
 
 
-def build_session(events, server_url):
+def build_session(events, server_url, api_gateway_url):
     attach_sound(events)
-    return NetworkGameSession(server_url, events)
+    return NetworkGameSession(server_url, events, api_gateway_url)
 
 
 def build_screens(events, config, session):
@@ -54,7 +55,7 @@ def build_screens(events, config, session):
     return manager
 
 
-def run_gui(server_url=DEFAULT_SERVER_URL, config=settings, run_app=run_app):
+def run_gui(server_url=DEFAULT_SERVER_URL, api_gateway_url=DEFAULT_API_GATEWAY_URL, config=settings, run_app=run_app):
     # run_app is injectable (defaulting to the real window/render loop) so
     # this function's own wiring - config sync, session/screen construction
     # - stays testable with a fake in its place, without ever opening a
@@ -63,7 +64,7 @@ def run_gui(server_url=DEFAULT_SERVER_URL, config=settings, run_app=run_app):
     config = with_synced_rest_durations(config, PROJECT_ROOT)
     events = EventBus()
     attach_session_logging(events)
-    session = build_session(events, server_url)
+    session = build_session(events, server_url, api_gateway_url)
     manager = build_screens(events, config, session)
     run_app(session, manager)
 

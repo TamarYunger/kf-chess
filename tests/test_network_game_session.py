@@ -38,10 +38,34 @@ class FakeNetworkClient:
         return messages
 
 
+class FakeLoginClient:
+    """Stands in for session.login_client.LoginClient - the REST-login
+    side of NetworkGameSession is tested against this fake here; LoginClient
+    itself already has its own real-HTTP-server integration tests
+    (tests/test_login_client.py)."""
+
+    def __init__(self):
+        self.logins = []  # (username, password) pairs, one per login() call
+        self._queue = []
+
+    def login(self, username, password):
+        self.logins.append((username, password))
+
+    def push(self, message):
+        """Test helper: queues a message as if a background login just
+        finished (a token, or a rejection)."""
+        self._queue.append(message)
+
+    def drain(self):
+        messages, self._queue = self._queue, []
+        return messages
+
+
 def make_session():
     client = FakeNetworkClient()
     events = EventBus()
-    session = NetworkGameSession("ws://unused", events, network_client=client)
+    session = NetworkGameSession("ws://unused", events, "http://unused", network_client=client,
+                                  login_client=FakeLoginClient())
     return session, client, events
 
 
@@ -120,12 +144,42 @@ def test_close_stops_the_network_client():
 
 
 def test_string_commands_are_forwarded_as_is():
-    # LoginScreen's "LOGIN <username>" needs no cell/square translation.
+    # e.g. HomeScreen's "PLAY" - needs no cell/square translation.
     session, client, events = make_session()
 
-    session.submit_command("LOGIN alice")
+    session.submit_command("PLAY")
 
-    assert client.sent == ["LOGIN alice"]
+    assert client.sent == ["PLAY"]
+
+
+def test_login_command_goes_to_the_login_client_not_the_websocket():
+    session, client, events = make_session()
+
+    session.submit_command({"type": "login", "username": "alice", "password": "secret123"})
+
+    assert session._login_client.logins == [("alice", "secret123")]
+    assert client.sent == []  # nothing went out over the WebSocket yet
+
+
+def test_a_received_auth_token_is_sent_as_an_auth_command_over_the_websocket():
+    session, client, events = make_session()
+
+    session._login_client.push({"type": "auth_token_received", "payload": {"token": "tok-abc", "rating": 1200}})
+    session.tick()
+
+    assert client.sent == ["AUTH tok-abc"]
+
+
+def test_a_login_rejection_is_published_on_the_bus_not_sent_over_the_websocket():
+    session, client, events = make_session()
+    received = []
+    events.subscribe("login_rejected", received.append)
+
+    session._login_client.push({"type": "login_rejected", "payload": {"message": "Invalid password"}})
+    session.tick()
+
+    assert received == [{"message": "Invalid password"}]
+    assert client.sent == []
 
 
 def test_click_before_any_snapshot_sends_nothing():
@@ -312,7 +366,7 @@ def test_end_to_end_against_a_real_websocket_server():
             port = server.sockets[0].getsockname()[1]
             events = EventBus()
             client = NetworkClient(f"ws://127.0.0.1:{port}", close_timeout=0.5, open_timeout=5, reconnect_delay=0.1)
-            session = NetworkGameSession("unused", events, network_client=client)
+            session = NetworkGameSession("unused", events, "http://unused", network_client=client)
             try:
                 await asyncio.wait_for(connected.wait(), timeout=5.0)
 

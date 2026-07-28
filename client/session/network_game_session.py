@@ -10,6 +10,7 @@ import dataclasses
 from board.notation import square_name
 from bus.event_types import CLICK, JUMP, LEGAL_DESTINATIONS, REJECTED, SNAPSHOT
 from client.session.game_session import GameSession
+from client.session.login_client import AUTH_TOKEN_RECEIVED, LoginClient
 from client.session.network_client import NetworkClient
 from client.session.snapshot_codec import snapshot_from_json
 
@@ -29,13 +30,17 @@ class NetworkGameSession(GameSession):
     sends "MOVE <start> <end>" once a second click arrives - mirroring
     exactly what game.controller.Controller does for LocalGameSession, just
     producing a server command instead of calling GameEngine directly.
-    Plain string commands (e.g. LoginScreen's "LOGIN <username>") are
-    forwarded to the server as-is - they need no such translation.
+    Plain string commands (e.g. "MOVE e2 e4") are forwarded to the server
+    as-is - they need no such translation. LoginScreen's own command is
+    the one exception that isn't a plain string and isn't cell-shaped
+    either - {"type": "login", "username": ..., "password": ...} - see
+    submit_command below for why that needs its own branch.
     """
 
-    def __init__(self, url, events, network_client=None):
+    def __init__(self, url, events, api_gateway_url, network_client=None, login_client=None):
         self._events = events
         self._client = network_client if network_client is not None else NetworkClient(url)
+        self._login_client = login_client if login_client is not None else LoginClient(api_gateway_url)
         self._snapshot = None
         self._pending_start = None  # a cell selected by a first click, awaiting a second
         self._legal_destinations = frozenset()  # reply to that click's own SELECT, once it arrives
@@ -46,6 +51,12 @@ class NetworkGameSession(GameSession):
     def submit_command(self, command):
         if isinstance(command, str):
             self._client.send(command)
+            return
+        if command.get("type") == "login":
+            # Not sent over the WebSocket at all - LoginScreen's username/
+            # password go to the API Gateway over REST instead (see
+            # tick() below for what happens once that call comes back).
+            self._login_client.login(command["username"], command["password"])
             return
         if self._snapshot is None:
             return  # no board height known yet to turn a cell into a square
@@ -81,6 +92,18 @@ class NetworkGameSession(GameSession):
         return square_name(cell, self._snapshot.height)
 
     def tick(self):
+        for message in self._login_client.drain():
+            if message["type"] == AUTH_TOKEN_RECEIVED:
+                # Not published on the bus - this is purely internal
+                # plumbing. The actual "login"/"login_rejected" the UI
+                # reacts to (LoginScreen, ScreenManager's own transition)
+                # comes back over the WebSocket itself, exactly as it
+                # already did before AUTH existed - see _client.drain()
+                # below, unchanged.
+                self._client.send(f"AUTH {message['payload']['token']}")
+            else:  # LOGIN_REJECTED
+                self._events.publish(message["type"], message["payload"])
+
         for message in self._client.drain():
             self._events.publish(message["type"], message.get("payload"))
             if message["type"] == SNAPSHOT:

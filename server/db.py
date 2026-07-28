@@ -5,6 +5,7 @@ testable on its own with a plain temp-file or in-memory database.
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 import sqlite3
 
@@ -78,6 +79,108 @@ class AccountStore:
     def get_rating(self, username):
         row = self._conn.execute("SELECT rating FROM users WHERE username = ?", (username,)).fetchone()
         return row[0] if row else None
+
+    def close(self):
+        self._conn.close()
+
+
+def build_redis_client():
+    """The real Redis connection main() (both server/ws_server.py's and
+    server/api_gateway.py's) builds for production use - the one place
+    that reads REDIS_HOST/REDIS_PORT, same reasoning as PostgresAccountStore
+    vs main()'s DB_BACKEND choice: a connection helper isn't a "which
+    backend" decision, it's just wiring, so it lives here rather than
+    duplicated in every service's own main(). Deliberately no fallback
+    defaults - a service that needs Redis and doesn't have these set
+    should crash immediately, not silently guess a host.
+
+    redis.Redis() itself is lazy (it only opens a socket on the first
+    actual command), so this call succeeding doesn't mean a real Redis is
+    reachable - only that the parameters were present.
+    """
+    import redis
+
+    return redis.Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
+
+
+class PostgresAccountStore:
+    """Same three-method contract as AccountStore (authenticate/
+    update_rating/get_rating), backed by PostgreSQL instead of a local
+    SQLite file - for when more than one process needs to share the same
+    account data. Still no websockets/asyncio import; the caller decides
+    which of the two stores to build (see server/ws_server.py's main()),
+    this class only knows how to talk to Postgres.
+
+    Unlike SQLite, more than one process can call authenticate() for the
+    same brand-new username at the same time (two players' first-ever
+    login racing each other), so account creation can't just be a plain
+    INSERT - see authenticate()'s comment.
+    """
+
+    def __init__(self, dsn):
+        import psycopg2
+
+        self._conn = psycopg2.connect(dsn)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS users ("
+                "username TEXT PRIMARY KEY, "
+                "password_hash TEXT NOT NULL, "
+                "salt TEXT NOT NULL, "
+                "rating INTEGER NOT NULL"
+                ")"
+            )
+        self._conn.commit()
+
+    def authenticate(self, username, password):
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT password_hash, salt, rating FROM users WHERE username = %s", (username,),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                stored_hash, salt, rating = row
+                if _hash_password(password, salt) != stored_hash:
+                    return False, None, "Invalid password"
+                return True, rating, None
+
+            # Nobody has this username yet, as far as we saw - but another
+            # shard could be creating it from a concurrent first login at
+            # the same moment. ON CONFLICT DO NOTHING makes the INSERT a
+            # no-op if we lost that race, instead of raising/crashing.
+            salt = secrets.token_hex(16)
+            password_hash = _hash_password(password, salt)
+            cur.execute(
+                "INSERT INTO users (username, password_hash, salt, rating) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING",
+                (username, password_hash, salt, DEFAULT_RATING),
+            )
+            self._conn.commit()
+
+            cur.execute(
+                "SELECT password_hash, salt, rating FROM users WHERE username = %s", (username,),
+            )
+            stored_hash, stored_salt, rating = cur.fetchone()
+            if stored_hash == password_hash:
+                return True, DEFAULT_RATING, None  # our own insert won the race
+
+            # Someone else's login created this username first - check our
+            # password against what they actually stored, not what we
+            # attempted to insert.
+            if _hash_password(password, stored_salt) != stored_hash:
+                return False, None, "Invalid password"
+            return True, rating, None
+
+    def update_rating(self, username, rating):
+        with self._conn.cursor() as cur:
+            cur.execute("UPDATE users SET rating = %s WHERE username = %s", (rating, username))
+        self._conn.commit()
+
+    def get_rating(self, username):
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT rating FROM users WHERE username = %s", (username,))
+            row = cur.fetchone()
+            return row[0] if row else None
 
     def close(self):
         self._conn.close()

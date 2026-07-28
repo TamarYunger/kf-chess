@@ -1,4 +1,4 @@
-from server.db import DEFAULT_RATING, AccountStore
+from server.db import DEFAULT_RATING, AccountStore, build_redis_client
 
 
 def test_first_login_creates_the_account_at_the_default_rating():
@@ -124,3 +124,17 @@ def test_wrong_password_still_rejected_after_reopening_the_file(tmp_path):
     reopened.close()
 
     assert ok is False
+
+
+def test_build_redis_client_uses_the_configured_host_and_port(monkeypatch):
+    # redis.Redis() is lazy - it never opens a socket just from being
+    # constructed - so this checks the parameters were wired through
+    # correctly without needing a real Redis server reachable at all.
+    monkeypatch.setenv("REDIS_HOST", "some-redis-host")
+    monkeypatch.setenv("REDIS_PORT", "16379")
+
+    client = build_redis_client()
+
+    kwargs = client.connection_pool.connection_kwargs
+    assert kwargs["host"] == "some-redis-host"
+    assert kwargs["port"] == 16379

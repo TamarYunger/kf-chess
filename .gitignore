@@ -40,3 +40,7 @@ server/logs/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local machine-specific TLS-interception CA certs for Docker builds
+# (e.g. a corporate/filtering proxy) — never portable across machines.
+certs/*.crt

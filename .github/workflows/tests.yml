@@ -21,6 +21,22 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      # windows-latest ships PostgreSQL pre-installed but not running (see
+      # actions/runner-images' software manifest) - tests/test_db_postgres.py
+      # needs a real instance to test PostgresAccountStore's actual SQL
+      # against (see server/db.py), not a mock, so this starts the
+      # pre-installed service and creates the same kfchess/kfchess
+      # user+database that docker-compose.yml's postgres service uses
+      # locally, instead of reaching for `# pragma: no cover`.
+      - name: Start PostgreSQL and create the kfchess database
+        shell: pwsh
+        run: |
+          $service = Get-Service -Name "postgresql*" | Select-Object -First 1
+          Start-Service $service.Name
+          $env:PGPASSWORD = "postgres"
+          & "$env:PGBIN\psql" -U postgres -h localhost -c "CREATE USER kfchess WITH PASSWORD 'kfchess';"
+          & "$env:PGBIN\psql" -U postgres -h localhost -c "CREATE DATABASE kfchess OWNER kfchess;"
+
       - name: Run tests with coverage
         run: |
           coverage run -m pytest

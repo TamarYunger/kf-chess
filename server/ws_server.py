@@ -1,133 +1,154 @@
-"""The lobby: a WebSocket server that authenticates connections (LOGIN)
-and gets them into a server.room.Room - either automatically, matched by
-rating (PLAY, server.matchmaking), or manually by id (ROOM CREATE/JOIN) -
-then routes their MOVE/JUMP commands to whichever room they're in. Every
-room owns its own GameEngine; this class owns none directly.
+"""The WS Gateway: a WebSocket server that authenticates connections
+(AUTH, checked against a token server.api_gateway.py issued after its own
+REST /login - this class never sees a password) and forwards PLAY/ROOM
+CREATE/ROOM JOIN/MOVE/JUMP/SELECT to server/shard.py's Game Shard over
+NATS - it owns no server.room.Room/GameEngine itself at all anymore (see
+that module's own docstring for why: a Room and the real socket now live
+in two different processes, and Room can't reach a connection it doesn't
+have).
 
-This is the third place in the codebase that wires up a GameEngine, next
-to main.py's run() (the batch/script CLI) and session/local_game_session.py
-(the offline GUI path) - each is its own composition root for its own
-entry point, so a small amount of duplicated wiring here is expected
-rather than a shortcut worth removing.
+The one piece of game-adjacent state this class still keeps is
+`_connection_room` (connection -> room_id) - purely local bookkeeping so
+a later MOVE/JUMP/SELECT from an already-seated connection knows which
+room_id to attach to its own outgoing envelope. It learns a room_id the
+same way it learns everything else the shard did - by relaying a "room"
+message back to the client (see _handle_outbox_message) - it never asks
+the shard directly.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import os
 import secrets
+import socket
 import time
-from pathlib import Path
 
 import websockets
 
-from board.loaders import load_text_board
-from bus.event_bus import EventBus
 from config import settings
-from game.engine import GameEngine
-from realtime.real_time_arbiter import RealTimeArbiter
-from rules.game_conditions import KingCaptureWinCondition, LastRankPromotion
-from rules.rule_engine import RuleEngine
-from rules.rule_registry import build_default_registry
-from server.db import AccountStore
+from server.db import build_redis_client
 from server.logging_config import configure_server_logging
 from server.matchmaking import find_opponent
 from server.protocol import (
     ProtocolError, encode_error, encode_login, encode_login_rejected, encode_no_match, parse_command,
 )
-from server.room import Room
 from server.safe_send import safe_send
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_HOST = "localhost"
-DEFAULT_PORT = 8765
-DEFAULT_DB_PATH = str(Path(__file__).resolve().parent / "accounts.db")
+# The subject server/shard.py's GameShard subscribes to for every command/
+# match/disconnect envelope - a plain string constant, not an import from
+# server.shard, so this module never pulls in the GameEngine/Room import
+# chain it no longer has any business needing.
+INBOX_SUBJECT = "shard.inbox"
 
-# How often GameServer ticks every room's GameEngine.wait() and broadcasts,
-# even with no incoming command - real-time motion (a move landing, a rest
-# cooldown expiring) has to reach clients without waiting for someone to
-# move. Also the resolution at which matchmaking timeouts are checked.
+# Overridable via env because inside a container "localhost" means the
+# container's own loopback, which Docker's port-mapping can't reach - the
+# process there needs to bind 0.0.0.0 instead. Bare-metal/local runs are
+# unaffected (env var unset -> same "localhost" default as before).
+DEFAULT_HOST = os.environ.get("KF_CHESS_HOST", "localhost")
+DEFAULT_PORT = 8765
+
+# How often GameServer resolves matchmaking timeouts, even with no
+# incoming command.
 TICK_INTERVAL_SECONDS = 0.05
 
 # How long a PLAY request waits for a compatible opponent before the
 # player gets "No opponent found" instead.
 MATCHMAKING_TIMEOUT_SECONDS = 60
 
-STANDARD_BOARD_TEXT = [
-    "bR bN bB bQ bK bB bN bR",
-    "bP bP bP bP bP bP bP bP",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    "wP wP wP wP wP wP wP wP",
-    "wR wN wB wQ wK wB wN wR",
-]
+
+def _default_redis_client():
+    """GameServer's redis_client=None default - an in-memory fake, not a
+    real connection, for exactly the reason AccountStore()'s own default
+    used to be in-memory SQLite: a GameServer must stay constructible
+    standalone (tests, `python -m server.ws_server` outside docker-compose)
+    without requiring a real Redis to be reachable. main() explicitly
+    builds and passes a real one (server.db.build_redis_client) for actual
+    deployment - this default is never used there."""
+    import fakeredis
+
+    return fakeredis.FakeRedis()
 
 
-def build_engine(board_lines, config=settings, events=None):
-    """`events` is optional and otherwise unused by this function itself -
-    passing one in is how a caller (see GameServer._new_room) gets to hear
-    GameEngine's own events (e.g. "game_over", which Room subscribes to
-    for rating updates) instead of GameEngine creating and keeping its own
-    private bus, which nothing outside it could ever observe."""
-    registry = build_default_registry(config)
-    board = load_text_board(board_lines, registry, config)
-    arbiter = RealTimeArbiter(board=board, promotion_rule=LastRankPromotion(config.PAWN_DIRECTION), config=config)
-    return GameEngine(
-        board=board,
-        rule_engine=RuleEngine(rule_registry=registry, config=config),
-        arbiter=arbiter,
-        win_condition=KingCaptureWinCondition(),
-        config=config,
-        events=events,
-    )
+def _default_nats_client():
+    """Same reasoning as _default_redis_client, for NATS: a GameServer
+    must stay constructible/testable standalone, without a real NATS
+    server reachable. This fake only supports publish() (GameServer never
+    subscribes to anything but its own outbox subject, which it does
+    explicitly via start() - a bare default that silently drops every
+    publish() is enough for a GameServer nothing ever talks back to)."""
+
+    class _NullNatsClient:
+        async def publish(self, subject, payload):
+            pass
+
+        async def subscribe(self, subject, cb):
+            pass
+
+    return _NullNatsClient()
 
 
 class GameServer:
-    """The lobby. Owns no GameEngine itself - every game lives on its own
-    server.room.Room (see server/room.py), created here and never
-    afterwards touched directly; this class only decides *which* room (if
-    any) a connection belongs to and routes accordingly.
+    """The WS Gateway. Holds every live connection on this instance and
+    forwards commands to whichever Game Shard owns the relevant room -
+    over NATS, never directly - see this module's own docstring.
 
     Collaborators:
-      - `accounts` (server.db.AccountStore): LOGIN's username/password is
-        checked here, and ratings are read/written by each Room. Defaults
-        to an in-memory store so a GameServer is usable standalone (e.g.
-        in tests) without a real database file.
-      - server.matchmaking.find_opponent (pure logic): LOGIN only
-        authenticates - it does NOT put anyone in a room. PLAY joins the
-        matchmaking queue and creates a fresh Room, seating both sides,
-        once matched against another PLAY-ing connection within rating
-        range - or times out after MATCHMAKING_TIMEOUT_SECONDS with
-        "no_match". ROOM CREATE/JOIN reach a Room the same way (see
-        _new_room/seat_or_view) without going through the queue at all.
-
-    `board_lines`/`config` describe the board every new Room's GameEngine
-    starts from - the same for every room today (no per-room board choice
-    yet).
+      - `redis_client`: where AUTH's token is looked up (server.api_gateway.py
+        wrote it there) and where this connection's own
+        `connection_id -> instance_id` registry entry is written once
+        authenticated (server.nats_connection.NatsConnectionProxy reads
+        that same registry from the Shard side, to know which Gateway
+        instance's outbox to publish a reply/broadcast to). Defaults to
+        an in-memory fake (see _default_redis_client) so a GameServer is
+        usable standalone (tests) without a real Redis.
+      - `nats_client`: how a command actually reaches the Shard, and how
+        a reply/broadcast actually reaches this connection - see
+        start()/_handle_outbox_message. Defaults similarly to an
+        in-memory fake (see _default_nats_client).
+      - `instance_id`: identifies *this* Gateway process/container in the
+        registry above - defaults to socket.gethostname() (the container
+        ID, inside Docker). One instance can hold many connections; NATS
+        traffic addressed to this instance arrives on one shared outbox
+        subject (`outbox.<instance_id>`), not one subject per connection -
+        see Server_Design.md for why that distinction matters at scale.
+      - server.matchmaking.find_opponent (pure logic, unchanged): AUTH
+        only authenticates - it does NOT put anyone in a room. PLAY joins
+        the matchmaking queue and, once matched against another
+        PLAY-ing connection within rating range, asks the Shard to seat
+        both in a new room together (a "match" envelope) - or times out
+        after MATCHMAKING_TIMEOUT_SECONDS with "no_match". ROOM CREATE/
+        JOIN reach the Shard the same way, as "command" envelopes.
     """
 
-    def __init__(self, config=settings, accounts=None, board_lines=None):
+    def __init__(self, config=settings, redis_client=None, nats_client=None, instance_id=None):
         self._config = config
-        self._board_lines = board_lines or STANDARD_BOARD_TEXT
-        self._colors = tuple(config.COLORS)
-        self._accounts = accounts if accounts is not None else AccountStore()
+        self._redis = redis_client if redis_client is not None else _default_redis_client()
+        self._nats = nats_client if nats_client is not None else _default_nats_client()
+        self._instance_id = instance_id or socket.gethostname()
         self._clients = set()
         self._players = {}  # connection -> {"username", "rating"} (authenticated, connected)
         self._queue = {}  # connection -> {"username", "rating", "queued_at"} (searching)
-        self._rooms = {}  # room_id -> Room
-        self._connection_room = {}  # connection -> room_id
+        self._connection_room = {}  # connection -> room_id (learned from a relayed "room" message)
+        self._connection_ids = {}  # connection -> connection_id
+        self._connections_by_id = {}  # connection_id -> connection
         self._last_tick = time.monotonic()
+
+    async def start(self):
+        """Subscribes to this instance's own outbox - must be awaited once
+        before any connection can complete a round trip through the Shard
+        (see serve_forever). Separate from __init__ because subscribing is
+        an async operation."""
+        await self._nats.subscribe(f"outbox.{self._instance_id}", cb=self._handle_outbox_message)
 
     async def handle_connection(self, connection):
         """The per-connection coroutine websockets.serve runs for as long
-        as that connection is open. Unlike the pre-rooms server, nothing
-        is sent immediately on connect - there's no default game to show
-        until LOGIN, then PLAY/ROOM CREATE/ROOM JOIN, actually put this
-        connection in a room (see Room.welcome, which sends the first
-        snapshot once that happens)."""
+        as that connection is open. Nothing is sent immediately on
+        connect - there's no default game to show until AUTH, then PLAY/
+        ROOM CREATE/ROOM JOIN, actually put this connection in a room."""
         self._clients.add(connection)
         try:
             async for raw in connection:
@@ -137,19 +158,24 @@ class GameServer:
             self._queue.pop(connection, None)
             self._players.pop(connection, None)
             room_id = self._connection_room.pop(connection, None)
-            if room_id is not None:
-                room = self._rooms.get(room_id)
-                if room is not None:
-                    await room.handle_disconnect(connection)
+            connection_id = self._connection_ids.pop(connection, None)
+            if connection_id is not None:
+                self._connections_by_id.pop(connection_id, None)
+                self._redis.delete(f"connection:{connection_id}")
+                if room_id is not None:
+                    # The Shard's Room needs to know too, to start this
+                    # seat's disconnect grace period (server/room.py's
+                    # handle_disconnect) - it can't detect a dropped socket
+                    # itself, since it never held one.
+                    await self._publish_to_shard({
+                        "kind": "disconnect", "connection_id": connection_id, "room_id": room_id,
+                    })
 
     async def tick(self):
-        """Ticks every active room's GameEngine clock and resolves
-        matchmaking timeouts - on a fixed interval independent of any
-        client command (see serve_forever), so time-driven state reaches
-        clients as it happens."""
+        """Resolves matchmaking timeouts on a fixed interval, independent
+        of any client command - the Shard runs its own equivalent tick for
+        in-room real-time motion (see server/shard.py's run_forever)."""
         now = time.monotonic()
-        for room in list(self._rooms.values()):
-            await room.tick(now)
         await self._resolve_matchmaking_timeouts(now)
 
     async def _handle_message(self, connection, raw):
@@ -159,44 +185,57 @@ class GameServer:
             await self._safe_send(connection, json.dumps(encode_error(str(error))))
             return
 
-        if command.verb == "LOGIN":
-            await self._handle_login(connection, command.args[0], command.args[1])
+        if command.verb == "AUTH":
+            await self._handle_auth(connection, command.args[0])
             return
         if command.verb == "PLAY":
             await self._handle_play(connection)
             return
         if command.verb == "ROOM_CREATE":
-            await self._handle_room_create(connection)
+            await self._forward_command(connection, raw, room_id=None, verb_for_error="ROOM CREATE")
             return
         if command.verb == "ROOM_JOIN":
-            await self._handle_room_join(connection, command.args[0])
+            await self._forward_command(connection, raw, room_id=None, verb_for_error="ROOM JOIN")
             return
 
-        # MOVE / JUMP - the only verbs left; route to this connection's
-        # current room, if it has one.
+        # MOVE / JUMP / SELECT - the only verbs left; route to this
+        # connection's current room, if it has one.
         room_id = self._connection_room.get(connection)
         if room_id is None:
             await self._safe_send(connection, json.dumps(encode_error("Not in a room")))
             return
-        await self._rooms[room_id].handle_command(connection, command)
+        await self._forward_command(connection, raw, room_id=room_id, verb_for_error=command.verb)
 
-    # -- LOGIN: authentication only, no room -------------------------------
+    # -- AUTH: authentication only, no room ---------------------------------
 
-    async def _handle_login(self, connection, username, password):
+    async def _handle_auth(self, connection, token):
         if connection in self._players:
-            # Re-login from an already-authenticated connection just
+            # Re-AUTH from an already-authenticated connection just
             # confirms the same identity again.
-            await self._safe_send(connection, json.dumps(encode_login(username, self._players[connection]["rating"])))
+            player = self._players[connection]
+            await self._safe_send(connection, json.dumps(encode_login(player["username"], player["rating"])))
             return
 
-        ok, rating, error = self._accounts.authenticate(username, password)
-        if not ok:
-            logger.warning("login failed for %r", username)
-            await self._safe_send(connection, json.dumps(encode_login_rejected(error)))
+        key = f"token:{token}"
+        raw_identity = self._redis.get(key)
+        if raw_identity is None:
+            logger.warning("AUTH rejected: invalid or expired token")
+            await self._safe_send(connection, json.dumps(encode_login_rejected("Invalid or expired token")))
             return
+        # One-time use: a token that's already been redeemed (or replayed
+        # by an eavesdropper) doesn't authenticate a second connection.
+        self._redis.delete(key)
 
+        identity = json.loads(raw_identity)
+        username, rating = identity["username"], identity["rating"]
         self._players[connection] = {"username": username, "rating": rating}
-        logger.info("%s logged in (rating=%s)", username, rating)
+
+        connection_id = secrets.token_hex(8)
+        self._connection_ids[connection] = connection_id
+        self._connections_by_id[connection_id] = connection
+        self._redis.set(f"connection:{connection_id}", self._instance_id)
+
+        logger.info("%s authenticated (rating=%s)", username, rating)
         await self._safe_send(connection, json.dumps(encode_login(username, rating)))
 
     # -- PLAY / matchmaking -------------------------------------------------
@@ -204,7 +243,7 @@ class GameServer:
     async def _handle_play(self, connection):
         player = self._players.get(connection)
         if player is None:
-            await self._safe_send(connection, json.dumps(encode_error("Must LOGIN before PLAY")))
+            await self._safe_send(connection, json.dumps(encode_error("Must AUTH before PLAY")))
             return
         if connection in self._connection_room or connection in self._queue:
             return  # already in a room or already searching - PLAY is a no-op
@@ -218,14 +257,20 @@ class GameServer:
             return
 
         opponent = self._queue.pop(opponent_connection)
-        room = self._new_room()
-        role_mine = room.seat_or_view(connection, player["username"], player["rating"])
-        role_theirs = room.seat_or_view(opponent_connection, opponent["username"], opponent["rating"])
-        self._connection_room[connection] = room.room_id
-        self._connection_room[opponent_connection] = room.room_id
-        logger.info("matched %s vs %s in room %s", player["username"], opponent["username"], room.room_id)
-        await room.welcome(connection, role_mine)
-        await room.welcome(opponent_connection, role_theirs)
+        logger.info("matched %s vs %s", player["username"], opponent["username"])
+        await self._publish_to_shard({
+            "kind": "match",
+            "players": [
+                {
+                    "connection_id": self._connection_ids[connection],
+                    "username": player["username"], "rating": player["rating"],
+                },
+                {
+                    "connection_id": self._connection_ids[opponent_connection],
+                    "username": opponent["username"], "rating": opponent["rating"],
+                },
+            ],
+        })
 
     async def _resolve_matchmaking_timeouts(self, now):
         for connection, info in list(self._queue.items()):
@@ -234,55 +279,40 @@ class GameServer:
                 logger.info("%s's matchmaking search timed out", info["username"])
                 await self._safe_send(connection, json.dumps(encode_no_match()))
 
-    # -- ROOM CREATE / JOIN --------------------------------------------------
+    # -- Forwarding to the Shard ---------------------------------------------
 
-    async def _handle_room_create(self, connection):
+    async def _forward_command(self, connection, raw, room_id, verb_for_error):
         player = self._players.get(connection)
         if player is None:
-            await self._safe_send(connection, json.dumps(encode_error("Must LOGIN before ROOM CREATE")))
+            await self._safe_send(connection, json.dumps(encode_error(f"Must AUTH before {verb_for_error}")))
             return
+        await self._publish_to_shard({
+            "kind": "command",
+            "connection_id": self._connection_ids[connection],
+            "username": player["username"], "rating": player["rating"],
+            "room_id": room_id, "raw": raw,
+        })
 
-        room = self._new_room()
-        role = room.seat_or_view(connection, player["username"], player["rating"])
-        self._connection_room[connection] = room.room_id
-        logger.info("%s created room %s", player["username"], room.room_id)
-        await room.welcome(connection, role)
+    async def _publish_to_shard(self, envelope):
+        await self._nats.publish(INBOX_SUBJECT, json.dumps(envelope).encode("utf-8"))
 
-    async def _handle_room_join(self, connection, room_id):
-        player = self._players.get(connection)
-        if player is None:
-            await self._safe_send(connection, json.dumps(encode_error("Must LOGIN before ROOM JOIN")))
-            return
-
-        room = self._rooms.get(room_id)
-        if room is None:
-            await self._safe_send(connection, json.dumps(encode_error(f"Room {room_id!r} not found")))
-            return
-
-        was_started = room.started
-        was_reconnecting = room.is_reclaimable(player["username"])
-        role = room.seat_or_view(connection, player["username"], player["rating"])
-        self._connection_room[connection] = room.room_id
-        logger.info("%s joined room %s as %s", player["username"], room.room_id, role)
-        await room.welcome(connection, role)
-        if was_reconnecting:
-            await room.notify_reconnected(role)
-        if room.started and not was_started:
-            await room.notify_room_started(exclude=connection)
-
-    def _new_room(self):
-        room_id = self._generate_room_id()
-        events = EventBus()
-        engine = build_engine(self._board_lines, self._config, events=events)
-        room = Room(room_id, engine, self._colors, self._accounts)
-        self._rooms[room_id] = room
-        return room
-
-    def _generate_room_id(self):
-        room_id = secrets.token_hex(3)
-        while room_id in self._rooms:
-            room_id = secrets.token_hex(3)
-        return room_id
+    async def _handle_outbox_message(self, msg):
+        """The NATS subscription callback for this instance's own outbox
+        (see start()) - one message per reply/broadcast the Shard's Room
+        addressed to a connection_id this instance is holding. Relays it
+        to the real socket, and - the one bit of local bookkeeping this
+        class still needs - remembers the room_id from a "room" message,
+        so a later MOVE/JUMP/SELECT from the same connection knows where
+        to route to (see _handle_message)."""
+        envelope = json.loads(msg.data)
+        connection = self._connections_by_id.get(envelope["connection_id"])
+        if connection is None:
+            return  # this connection already disconnected from this instance
+        message = envelope["message"]
+        await self._safe_send(connection, message)
+        decoded = json.loads(message)
+        if decoded.get("type") == "room":
+            self._connection_room[connection] = decoded["payload"]["room_id"]
 
     async def _safe_send(self, connection, message):
         # A client can disconnect between being read from self._clients and
@@ -292,13 +322,15 @@ class GameServer:
         await safe_send(connection, message)
 
 
-async def serve_forever(host=DEFAULT_HOST, port=DEFAULT_PORT, on_ready=None, accounts=None, config=settings,
-                         board_lines=None):
-    """Runs the lobby until cancelled. `on_ready(bound_server, game_server)`
+async def serve_forever(host=DEFAULT_HOST, port=DEFAULT_PORT, on_ready=None, config=settings,
+                         redis_client=None, nats_client=None, instance_id=None):
+    """Runs the gateway until cancelled. `on_ready(bound_server, game_server)`
     is called once the socket is actually listening - mainly so tests can
     ask for an OS-assigned port (port=0) and learn what it became; not
     otherwise needed to run the server for real."""
-    game_server = GameServer(config=config, accounts=accounts, board_lines=board_lines)
+    game_server = GameServer(config=config, redis_client=redis_client, nats_client=nats_client,
+                              instance_id=instance_id)
+    await game_server.start()
     async with websockets.serve(game_server.handle_connection, host, port) as bound_server:
         if on_ready is not None:
             on_ready(bound_server, game_server)
@@ -309,9 +341,23 @@ async def serve_forever(host=DEFAULT_HOST, port=DEFAULT_PORT, on_ready=None, acc
 
 def main():  # pragma: no cover
     configure_server_logging()
-    accounts = AccountStore(DEFAULT_DB_PATH)
-    logger.info("starting KungFu Chess server on %s:%s", DEFAULT_HOST, DEFAULT_PORT)
-    asyncio.run(serve_forever(accounts=accounts))
+
+    # AUTH checks a token against Redis (see GameServer._handle_auth), and
+    # the connection_id registry (see GameServer._handle_auth/start) lives
+    # there too - both needed unconditionally, unlike server/api_gateway.py's
+    # and server/shard.py's own DB_BACKEND choice (this module doesn't
+    # touch AccountStore/Postgres at all anymore - see this module's own
+    # docstring for why Room, not GameServer, owns that now).
+    redis_client = build_redis_client()
+
+    async def _main():
+        import nats
+
+        nats_client = await nats.connect(os.environ["NATS_URL"])
+        logger.info("starting KungFu Chess WS Gateway on %s:%s", DEFAULT_HOST, DEFAULT_PORT)
+        await serve_forever(redis_client=redis_client, nats_client=nats_client)
+
+    asyncio.run(_main())
 
 
 if __name__ == "__main__":  # pragma: no cover

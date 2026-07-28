@@ -1,0 +1,61 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  nats:
+    image: nats:2-alpine
+    ports: ["4222:4222"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: kfchess
+      POSTGRES_PASSWORD: kfchess
+      POSTGRES_DB: kfchess
+    ports: ["5432:5432"]
+    volumes: ["postgres_data:/var/lib/postgresql/data"]
+
+  api-gateway:
+    build: .
+    command: ["python", "-m", "server.api_gateway"]
+    ports: ["8080:8080"]
+    environment:
+      KF_CHESS_HOST: "0.0.0.0"
+      DB_BACKEND: "postgres"
+      POSTGRES_HOST: "postgres"
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: "kfchess"
+      POSTGRES_USER: "kfchess"
+      POSTGRES_PASSWORD: "kfchess"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+    depends_on: [redis, postgres]
+
+  game-shard:
+    build: .
+    command: ["python", "-m", "server.shard"]
+    environment:
+      DB_BACKEND: "postgres"
+      POSTGRES_HOST: "postgres"
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: "kfchess"
+      POSTGRES_USER: "kfchess"
+      POSTGRES_PASSWORD: "kfchess"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      NATS_URL: "nats://nats:4222"
+    depends_on: [redis, nats, postgres]
+
+  ws-server:
+    build: .
+    ports: ["8765:8765"]
+    environment:
+      KF_CHESS_HOST: "0.0.0.0"
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      NATS_URL: "nats://nats:4222"
+    depends_on: [redis, nats, api-gateway, game-shard]
+
+volumes:
+  postgres_data:

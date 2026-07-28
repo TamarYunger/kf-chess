@@ -6,19 +6,62 @@ GUI ends up moving a piece on the server and back, closing the gap between
 the client's outgoing protocol and server/protocol.py's text commands.
 """
 import asyncio
+import json
 import time
 
+import fakeredis
 import websockets
+from aiohttp.test_utils import TestServer
 
 from bus.event_bus import EventBus
 from config import settings
+from server.api_gateway import build_app as build_api_gateway_app
 from server.db import AccountStore
+from server.shard import GameShard
 from server.ws_server import GameServer
 from client.session.network_game_session import NetworkGameSession
 from client.view.game_screen import GameScreen
 from client.view.graphics_renderer import SIDE_PANEL_WIDTH
 from client.view.img import Img
 from client.view.screens.login_screen import BUTTON_HEIGHT, BUTTON_WIDTH, BUTTON_X, BUTTON_Y, LoginScreen
+
+
+class FakeNatsClient:
+    """In-memory stand-in for nats.aio.client.Client - lets a real
+    GameServer (WS Gateway) and a real GameShard talk to each other with no
+    real NATS server running, the same way fakeredis already stands in for
+    Redis in these tests. publish() dispatches to subscribers synchronously.
+    """
+
+    def __init__(self):
+        self._subscribers = {}  # subject -> list of async callbacks
+
+    async def publish(self, subject, payload):
+        for callback in self._subscribers.get(subject, []):
+            await callback(_FakeMsg(subject, payload))
+
+    async def subscribe(self, subject, cb):
+        self._subscribers.setdefault(subject, []).append(cb)
+
+
+class _FakeMsg:
+    def __init__(self, subject, data):
+        self.subject = subject
+        self.data = data
+
+
+async def make_gateway_stack(board_lines=None, accounts=None, redis_client=None):
+    """A real GameServer (WS Gateway) + a real GameShard, wired together
+    exactly as docker-compose.yml wires the two actual services - only
+    NATS itself is faked (see FakeNatsClient), the same way this file
+    already fakes Redis (fakeredis) for its real-socket tests."""
+    nats_client = FakeNatsClient()
+    redis_client = redis_client if redis_client is not None else fakeredis.FakeRedis()
+    server = GameServer(config=settings, redis_client=redis_client, nats_client=nats_client)
+    await server.start()
+    shard = GameShard(nats_client, redis_client, config=settings, accounts=accounts, board_lines=board_lines)
+    await nats_client.subscribe("shard.inbox", cb=shard.handle_message)
+    return server, shard, redis_client
 
 
 async def _wait_until(predicate, timeout=5.0, interval=0.02):
@@ -41,14 +84,17 @@ async def _wait_for_a_snapshot(screen, canvas):
     await _wait_until(has_snapshot)
 
 
-async def _tick_loop(server):
-    """Stands in for serve_forever's own tick loop - these tests drive
-    websockets.serve directly (to reach into `server._rooms` without going
-    through serve_forever's port-reporting indirection), so they need to
-    advance every room's clock themselves the same way production does."""
+async def _tick_loop(server, shard):
+    """Stands in for serve_forever's/shard.run_forever's own tick loops -
+    these tests drive websockets.serve directly (to reach into
+    `shard._rooms` without going through port-reporting indirection), so
+    they need to advance both the Gateway's (matchmaking timeouts) and the
+    Shard's (in-room real-time motion) clocks themselves, the same way
+    production does with two separate processes each ticking their own."""
     while True:
         await asyncio.sleep(0.05)
         await server.tick()
+        await shard.tick()
 
 
 async def _pump(session):
@@ -65,13 +111,17 @@ async def _pump(session):
         await asyncio.sleep(0.02)
 
 
-async def _connect(url):
+async def _connect(url, api_gateway_url="http://unused"):
     """A real NetworkGameSession, together with a background task that
     keeps ticking it (see `_pump`), waited on until the socket is actually
     connected (the "connected" event NetworkClient emits) - submit_command
-    silently drops anything sent before then."""
+    silently drops anything sent before then. `api_gateway_url` only
+    matters to tests that actually exercise the REST /login hop (see
+    test_login_flow_and_rating_update_through_the_full_stack below) -
+    every other test here authenticates via `_login`'s token-seeding
+    shortcut instead, which never calls the API Gateway at all."""
     events = EventBus()
-    session = NetworkGameSession(url, events)
+    session = NetworkGameSession(url, events, api_gateway_url)
     pump = asyncio.create_task(_pump(session))
     connected = []
     events.subscribe("connected", lambda payload: connected.append(payload))
@@ -79,10 +129,21 @@ async def _connect(url):
     return events, session, pump
 
 
-async def _login(events, session, username, password):
+async def _login(events, session, server, username, rating=1200):
+    """Authenticates by seeding a token straight into `server`'s Redis and
+    sending AUTH with it directly - the same shortcut
+    tests/test_ws_server.py's own seed_token/authenticate use, and for the
+    same reason: this file is about proving the real GameScreen ->
+    NetworkGameSession -> NetworkClient -> real GameServer path for
+    ROOM/PLAY/MOVE, not re-proving the REST /login hop itself (that's
+    tests/test_api_gateway.py and tests/test_login_client.py's job -
+    the one exception is test_login_flow_and_rating_update_through_the_full_stack
+    below, which does go through a real API Gateway on purpose)."""
+    token = f"tok-{username}"
+    server._redis.set(f"token:{token}", json.dumps({"username": username, "rating": rating}))
     login_seen = []
     events.subscribe("login", lambda payload: login_seen.append(payload))
-    session.submit_command(f"LOGIN {username} {password}")
+    session.submit_command(f"AUTH {token}")
     assert await _wait_until(lambda: login_seen)
     return login_seen[0]
 
@@ -105,17 +166,17 @@ async def _join_room(events, session, room_id):
 
 def test_a_real_gui_click_reaches_the_real_server_and_moves_a_piece():
     async def scenario():
-        server = GameServer(config=settings, board_lines=["wR . .", ". . .", ". . bK"])
+        server, shard, redis_client = await make_gateway_stack(["wR . .", ". . .", ". . bK"])
 
         async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
-            tick_task = asyncio.create_task(_tick_loop(server))
+            tick_task = asyncio.create_task(_tick_loop(server, shard))
             events, session, pump = await _connect(url)
             events_b, session_b, pump_b = await _connect(url)
             try:
-                await _login(events, session, "alice", "pw1")
-                await _login(events_b, session_b, "bob", "pw2")
+                await _login(events, session, server, "alice")
+                await _login(events_b, session_b, server, "bob")
                 room = await _create_room(events, session)
                 room_id = room["room_id"]
                 # A lone creator can't move yet (see server/room.py's own
@@ -142,9 +203,9 @@ def test_a_real_gui_click_reaches_the_real_server_and_moves_a_piece():
                 assert screen._last_snapshot.moves[0].start == (0, 0)
                 assert screen._last_snapshot.moves[0].end == (0, 2)
 
-                # And it actually lands on the server-owned room's engine
+                # And it actually lands on the shard-owned room's engine
                 # too, not just in the decoded client-side snapshot.
-                room_engine = server._rooms[room_id]._engine
+                room_engine = shard._rooms[room_id]._engine
                 assert await _wait_until(lambda: room_engine.snapshot().cells[0][2] == "wR")
             finally:
                 session.close()
@@ -158,17 +219,17 @@ def test_a_real_gui_click_reaches_the_real_server_and_moves_a_piece():
 
 def test_two_real_clients_playing_through_the_full_stack_see_the_same_state():
     async def scenario():
-        server = GameServer(config=settings, board_lines=["wR . .", ". . .", ". . bK"])
+        server, shard, redis_client = await make_gateway_stack(["wR . .", ". . .", ". . bK"])
 
         async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
-            tick_task = asyncio.create_task(_tick_loop(server))
+            tick_task = asyncio.create_task(_tick_loop(server, shard))
             events_a, session_a, pump_a = await _connect(url)
             events_b, session_b, pump_b = await _connect(url)
             try:
-                await _login(events_a, session_a, "alice", "pw1")
-                await _login(events_b, session_b, "bob", "pw2")
+                await _login(events_a, session_a, server, "alice")
+                await _login(events_b, session_b, server, "bob")
                 room = await _create_room(events_a, session_a)
                 await _join_room(events_b, session_b, room["room_id"])
 
@@ -203,19 +264,19 @@ def test_two_real_clients_playing_through_the_full_stack_see_the_same_state():
 
 def test_three_real_clients_room_third_joiner_is_a_viewer_and_cannot_move():
     async def scenario():
-        server = GameServer(config=settings, board_lines=["wR . .", ". . .", ". . bK"])
+        server, shard, redis_client = await make_gateway_stack(["wR . .", ". . .", ". . bK"])
 
         async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
-            tick_task = asyncio.create_task(_tick_loop(server))
+            tick_task = asyncio.create_task(_tick_loop(server, shard))
             events_a, session_a, pump_a = await _connect(url)
             events_b, session_b, pump_b = await _connect(url)
             events_c, session_c, pump_c = await _connect(url)
             try:
-                await _login(events_a, session_a, "alice", "pw1")
-                await _login(events_b, session_b, "bob", "pw2")
-                await _login(events_c, session_c, "carol", "pw3")
+                await _login(events_a, session_a, server, "alice")
+                await _login(events_b, session_b, server, "bob")
+                await _login(events_c, session_c, server, "carol")
                 # screen_c must exist (and so be subscribed to "room")
                 # *before* carol joins - "room" is only ever published once,
                 # right when the join happens, and GameScreen learning its
@@ -258,11 +319,15 @@ def test_three_real_clients_room_third_joiner_is_a_viewer_and_cannot_move():
 
 
 def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
-    # The whole feature end to end: a real LoginScreen shows the server's
-    # own rejection for a wrong password (not a hand-crafted event), a
-    # correct password logs in, both players join the same room, and
+    # The whole feature end to end, across *both* services now (not just
+    # the WS Gateway): a real LoginScreen click does a real REST POST
+    # /login against a real server/api_gateway.py app, which shows the
+    # real 401 rejection for a wrong password (not a hand-crafted event),
+    # a correct password gets a real token that's redeemed over a real
+    # AUTH on the WebSocket, both players join the same room, and
     # finishing a game updates both players' ratings in a real SQLite
-    # file - not an in-memory stand-in.
+    # file - not an in-memory stand-in - shared by both services exactly
+    # as docker-compose.yml wires them in production.
     def type_text(field, text):
         for ch in text:
             field.handle_key(ord(ch))
@@ -271,19 +336,26 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
         db_path = str(tmp_path / "accounts.db")
         accounts = AccountStore(db_path)
         accounts.authenticate("alice", "correct-password")  # alice already has an account
-        server = GameServer(config=settings, accounts=accounts, board_lines=["wR . .", ". . .", "bK . ."])
+        redis_client = fakeredis.FakeRedis()  # shared by both services, like a real Redis would be
+        server, shard, redis_client = await make_gateway_stack(
+            ["wR . .", ". . .", "bK . ."], accounts=accounts, redis_client=redis_client,
+        )
+        api_gateway_app = build_api_gateway_app(accounts=accounts, redis_client=redis_client)
 
-        async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
+        async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server, \
+                TestServer(api_gateway_app) as api_gateway:
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
-            tick_task = asyncio.create_task(_tick_loop(server))
-            events_a, session_a, pump_a = await _connect(url)
+            api_gateway_url = str(api_gateway.make_url(""))
+            tick_task = asyncio.create_task(_tick_loop(server, shard))
+            events_a, session_a, pump_a = await _connect(url, api_gateway_url)
             login_a = LoginScreen(session_a, events_a)
             session_b = None
             pump_b = None
             try:
-                # Wrong password first - the real server rejects it, and
-                # that rejection reaches LoginScreen's own error banner.
+                # Wrong password first - the real API Gateway rejects it
+                # (a real 401 over a real HTTP connection), and that
+                # rejection reaches LoginScreen's own error banner.
                 login_a.handle_click(login_a._username_field.x + 5, login_a._username_field.y + 5)
                 type_text(login_a._username_field, "alice")
                 login_a.handle_click(login_a._password_field.x + 5, login_a._password_field.y + 5)
@@ -309,11 +381,17 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
                 assert login_a._error_message is None
 
                 # bob logs in fresh (no pre-existing account), straight
-                # through the wire protocol - LoginScreen's own send path
-                # is already covered by the alice half above.
-                events_b, session_b, pump_b = await _connect(url)
-                bob_login = await _login(events_b, session_b, "bob", "newpassword")
-                assert bob_login == {"username": "bob", "rating": 1200}
+                # through the wire protocol (submit_command's dict shape)
+                # rather than a second LoginScreen - LoginScreen's own send
+                # path is already covered by the alice half above. Still a
+                # real REST call, auto-creating his account exactly as
+                # server/db.py's AccountStore.authenticate describes.
+                events_b, session_b, pump_b = await _connect(url, api_gateway_url)
+                bob_login_seen = []
+                events_b.subscribe("login", lambda payload: bob_login_seen.append(payload))
+                session_b.submit_command({"type": "login", "username": "bob", "password": "newpassword"})
+                assert await _wait_until(lambda: bob_login_seen)
+                assert bob_login_seen[0] == {"username": "bob", "rating": 1200}
 
                 assert accounts.get_rating("alice") == 1200
                 assert accounts.get_rating("bob") == 1200
@@ -325,7 +403,7 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
                 # Whichever of the two ended up seated "w" captures the
                 # other's king with its rook - an immediate game over
                 # (KingCaptureWinCondition).
-                room_engine = server._rooms[room["room_id"]]._engine
+                room_engine = shard._rooms[room["room_id"]]._engine
                 room_engine.request_move((0, 0), (2, 0))
 
                 def game_finished_and_rated():
@@ -363,20 +441,20 @@ def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
     # fake-connection tests; this test's job is the real-socket wiring
     # around it.
     async def scenario():
-        server = GameServer(config=settings, board_lines=["wK . .", ". . .", "bK . ."])
+        server, shard, redis_client = await make_gateway_stack(["wK . .", ". . .", "bK . ."])
 
         async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
-            tick_task = asyncio.create_task(_tick_loop(server))
+            tick_task = asyncio.create_task(_tick_loop(server, shard))
             events_a, session_a, pump_a = await _connect(url)
             events_b, session_b, pump_b = await _connect(url)
             screen_a = GameScreen(settings, session_a, events_a, board_x_offset=SIDE_PANEL_WIDTH)
             screen_b = GameScreen(settings, session_b, events_b, board_x_offset=SIDE_PANEL_WIDTH)
             canvas_a, canvas_b = Img.create(1, 1), Img.create(1, 1)
             try:
-                await _login(events_a, session_a, "alice", "pw1")
-                await _login(events_b, session_b, "bob", "pw2")
+                await _login(events_a, session_a, server, "alice")
+                await _login(events_b, session_b, server, "bob")
 
                 matched_a, matched_b = [], []
                 events_a.subscribe("room", lambda p: matched_a.append(p))
@@ -388,7 +466,7 @@ def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
                 alice_color = matched_a[0]["role"]
                 bob_color = matched_b[0]["role"]
                 room_id = matched_a[0]["room_id"]
-                room = server._rooms[room_id]
+                room = shard._rooms[room_id]
 
                 await _wait_for_a_snapshot(screen_a, canvas_a)
                 await _wait_for_a_snapshot(screen_b, canvas_b)

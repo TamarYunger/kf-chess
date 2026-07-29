@@ -140,6 +140,13 @@ class PostgresAccountStore:
             row = cur.fetchone()
             if row is not None:
                 stored_hash, salt, rating = row
+                # Read-only so far, but psycopg2's default non-autocommit
+                # mode still leaves this connection "idle in transaction"
+                # until something closes it - and this connection is
+                # long-lived (one per process, see server/api_gateway.py's
+                # main()), so every login for an existing user would
+                # otherwise leave it open indefinitely between requests.
+                self._conn.commit()
                 if _hash_password(password, salt) != stored_hash:
                     return False, None, "Invalid password"
                 return True, rating, None
@@ -161,6 +168,7 @@ class PostgresAccountStore:
                 "SELECT password_hash, salt, rating FROM users WHERE username = %s", (username,),
             )
             stored_hash, stored_salt, rating = cur.fetchone()
+            self._conn.commit()  # read-only from here - see the existing-user branch's own comment
             if stored_hash == password_hash:
                 return True, DEFAULT_RATING, None  # our own insert won the race
 
@@ -180,6 +188,7 @@ class PostgresAccountStore:
         with self._conn.cursor() as cur:
             cur.execute("SELECT rating FROM users WHERE username = %s", (username,))
             row = cur.fetchone()
+            self._conn.commit()  # read-only - see authenticate()'s own comment on why this still matters
             return row[0] if row else None
 
     def close(self):

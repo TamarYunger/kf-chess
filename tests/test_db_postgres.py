@@ -8,6 +8,7 @@ Windows runner's pre-installed PostgreSQL service.
 import os
 import threading
 
+import psycopg2.extensions
 import pytest
 
 from server.db import DEFAULT_RATING, PostgresAccountStore
@@ -73,6 +74,44 @@ def test_update_rating_persists_and_is_returned_by_future_logins(store):
 
 def test_get_rating_for_an_unknown_username_returns_none(store):
     assert store.get_rating("nobody") is None
+
+
+def test_authenticate_does_not_leave_an_open_transaction_for_a_brand_new_user(store):
+    # A long-lived process (server/api_gateway.py's main() holds one
+    # PostgresAccountStore/connection for its whole lifetime) must not
+    # leave this connection "idle in transaction" between requests - that
+    # blocks unrelated things sharing the same tables (e.g. this very
+    # fixture's own TRUNCATE, next time it runs) until something else
+    # eventually reuses the connection. Covers the new-user path's own
+    # race-check SELECT (after the INSERT), not just the existing-user
+    # path below.
+    store.authenticate("alice", "secret123")  # first-ever login for this username
+
+    assert store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+
+
+def test_authenticate_does_not_leave_an_open_transaction_for_an_existing_user(store):
+    store.authenticate("alice", "secret123")  # creates the account
+
+    store.authenticate("alice", "secret123")  # existing-user path
+
+    assert store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+
+
+def test_authenticate_does_not_leave_an_open_transaction_after_a_wrong_password(store):
+    store.authenticate("alice", "secret123")
+
+    store.authenticate("alice", "wrong-password")
+
+    assert store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+
+
+def test_get_rating_does_not_leave_an_open_transaction(store):
+    store.authenticate("alice", "secret123")
+
+    store.get_rating("alice")
+
+    assert store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
 
 
 def test_two_different_usernames_are_independent_accounts(store):

@@ -23,17 +23,13 @@ import logging
 import os
 import secrets
 import socket
-import time
 
 import websockets
 
 from config import settings
 from server.db import build_redis_client
 from server.logging_config import configure_server_logging
-from server.matchmaking import find_opponent
-from server.protocol import (
-    ProtocolError, encode_error, encode_login, encode_login_rejected, encode_no_match, parse_command,
-)
+from server.protocol import ProtocolError, encode_error, encode_login, encode_login_rejected, parse_command
 from server.safe_send import safe_send
 
 logger = logging.getLogger(__name__)
@@ -44,20 +40,17 @@ logger = logging.getLogger(__name__)
 # chain it no longer has any business needing.
 INBOX_SUBJECT = "shard.inbox"
 
+# The subject server/matchmaker_service.py's MatchmakerService subscribes
+# to for every PLAY request - same "duplicated constant, not imported"
+# reasoning as INBOX_SUBJECT above.
+MATCHMAKER_INBOX_SUBJECT = "matchmaker.inbox"
+
 # Overridable via env because inside a container "localhost" means the
 # container's own loopback, which Docker's port-mapping can't reach - the
 # process there needs to bind 0.0.0.0 instead. Bare-metal/local runs are
 # unaffected (env var unset -> same "localhost" default as before).
 DEFAULT_HOST = os.environ.get("KF_CHESS_HOST", "localhost")
 DEFAULT_PORT = 8765
-
-# How often GameServer resolves matchmaking timeouts, even with no
-# incoming command.
-TICK_INTERVAL_SECONDS = 0.05
-
-# How long a PLAY request waits for a compatible opponent before the
-# player gets "No opponent found" instead.
-MATCHMAKING_TIMEOUT_SECONDS = 60
 
 
 def _default_redis_client():
@@ -115,13 +108,15 @@ class GameServer:
         traffic addressed to this instance arrives on one shared outbox
         subject (`outbox.<instance_id>`), not one subject per connection -
         see Server_Design.md for why that distinction matters at scale.
-      - server.matchmaking.find_opponent (pure logic, unchanged): AUTH
-        only authenticates - it does NOT put anyone in a room. PLAY joins
-        the matchmaking queue and, once matched against another
-        PLAY-ing connection within rating range, asks the Shard to seat
-        both in a new room together (a "match" envelope) - or times out
-        after MATCHMAKING_TIMEOUT_SECONDS with "no_match". ROOM CREATE/
-        JOIN reach the Shard the same way, as "command" envelopes.
+      - PLAY only forwards to server/matchmaker_service.py's Matchmaker
+        (a "play" envelope, on MATCHMAKER_INBOX_SUBJECT) - AUTH only
+        authenticates, it does NOT put anyone in a room, and this class no
+        longer runs server.matchmaking.find_opponent or holds a waiting
+        queue itself (see that module's own docstring for why: a queue
+        here would be per-Gateway-*instance*, so two players PLAY-ing on
+        two different instances would never be compared against each
+        other). ROOM CREATE/JOIN reach the Shard the same way, as
+        "command" envelopes.
     """
 
     def __init__(self, config=settings, redis_client=None, nats_client=None, instance_id=None):
@@ -131,11 +126,9 @@ class GameServer:
         self._instance_id = instance_id or socket.gethostname()
         self._clients = set()
         self._players = {}  # connection -> {"username", "rating"} (authenticated, connected)
-        self._queue = {}  # connection -> {"username", "rating", "queued_at"} (searching)
         self._connection_room = {}  # connection -> room_id (learned from a relayed "room" message)
         self._connection_ids = {}  # connection -> connection_id
         self._connections_by_id = {}  # connection_id -> connection
-        self._last_tick = time.monotonic()
 
     async def start(self):
         """Subscribes to this instance's own outbox - must be awaited once
@@ -155,7 +148,6 @@ class GameServer:
                 await self._handle_message(connection, raw)
         finally:
             self._clients.discard(connection)
-            self._queue.pop(connection, None)
             self._players.pop(connection, None)
             room_id = self._connection_room.pop(connection, None)
             connection_id = self._connection_ids.pop(connection, None)
@@ -170,13 +162,6 @@ class GameServer:
                     await self._publish_to_shard({
                         "kind": "disconnect", "connection_id": connection_id, "room_id": room_id,
                     })
-
-    async def tick(self):
-        """Resolves matchmaking timeouts on a fixed interval, independent
-        of any client command - the Shard runs its own equivalent tick for
-        in-room real-time motion (see server/shard.py's run_forever)."""
-        now = time.monotonic()
-        await self._resolve_matchmaking_timeouts(now)
 
     async def _handle_message(self, connection, raw):
         try:
@@ -238,46 +223,25 @@ class GameServer:
         logger.info("%s authenticated (rating=%s)", username, rating)
         await self._safe_send(connection, json.dumps(encode_login(username, rating)))
 
-    # -- PLAY / matchmaking -------------------------------------------------
+    # -- PLAY / matchmaking ---------------------------------------------------
 
     async def _handle_play(self, connection):
+        """Forwards to server/matchmaker_service.py's Matchmaker - see this
+        class's own docstring for why the waiting queue isn't kept here.
+        "Already searching" is deliberately not checked here (this class no
+        longer tracks a queue to check against) - the Matchmaker guards
+        that itself against its own Redis-backed queue."""
         player = self._players.get(connection)
         if player is None:
             await self._safe_send(connection, json.dumps(encode_error("Must AUTH before PLAY")))
             return
-        if connection in self._connection_room or connection in self._queue:
-            return  # already in a room or already searching - PLAY is a no-op
+        if connection in self._connection_room:
+            return  # already in a room - PLAY is a no-op
 
-        waiting = [(conn, info["rating"]) for conn, info in self._queue.items()]
-        opponent_connection = find_opponent(player["rating"], waiting)
-        if opponent_connection is None:
-            self._queue[connection] = {
-                "username": player["username"], "rating": player["rating"], "queued_at": time.monotonic(),
-            }
-            return
-
-        opponent = self._queue.pop(opponent_connection)
-        logger.info("matched %s vs %s", player["username"], opponent["username"])
-        await self._publish_to_shard({
-            "kind": "match",
-            "players": [
-                {
-                    "connection_id": self._connection_ids[connection],
-                    "username": player["username"], "rating": player["rating"],
-                },
-                {
-                    "connection_id": self._connection_ids[opponent_connection],
-                    "username": opponent["username"], "rating": opponent["rating"],
-                },
-            ],
-        })
-
-    async def _resolve_matchmaking_timeouts(self, now):
-        for connection, info in list(self._queue.items()):
-            if now - info["queued_at"] >= MATCHMAKING_TIMEOUT_SECONDS:
-                del self._queue[connection]
-                logger.info("%s's matchmaking search timed out", info["username"])
-                await self._safe_send(connection, json.dumps(encode_no_match()))
+        await self._nats.publish(MATCHMAKER_INBOX_SUBJECT, json.dumps({
+            "connection_id": self._connection_ids[connection],
+            "username": player["username"], "rating": player["rating"],
+        }).encode("utf-8"))
 
     # -- Forwarding to the Shard ---------------------------------------------
 
@@ -327,16 +291,18 @@ async def serve_forever(host=DEFAULT_HOST, port=DEFAULT_PORT, on_ready=None, con
     """Runs the gateway until cancelled. `on_ready(bound_server, game_server)`
     is called once the socket is actually listening - mainly so tests can
     ask for an OS-assigned port (port=0) and learn what it became; not
-    otherwise needed to run the server for real."""
+    otherwise needed to run the server for real. No periodic tick of its
+    own anymore (see GameServer's own docstring - matchmaking timeouts are
+    server/matchmaker_service.py's job now, and the Shard runs its own tick
+    for in-room real-time motion) - this just has to stay alive for as long
+    as `bound_server` does."""
     game_server = GameServer(config=config, redis_client=redis_client, nats_client=nats_client,
                               instance_id=instance_id)
     await game_server.start()
     async with websockets.serve(game_server.handle_connection, host, port) as bound_server:
         if on_ready is not None:
             on_ready(bound_server, game_server)
-        while True:
-            await asyncio.sleep(TICK_INTERVAL_SECONDS)
-            await game_server.tick()
+        await asyncio.Future()
 
 
 def main():  # pragma: no cover

@@ -17,6 +17,7 @@ from bus.event_bus import EventBus
 from config import settings
 from server.api_gateway import build_app as build_api_gateway_app
 from server.db import AccountStore
+from server.matchmaker_service import MatchmakerService
 from server.shard import GameShard
 from server.ws_server import GameServer
 from client.session.network_game_session import NetworkGameSession
@@ -51,16 +52,19 @@ class _FakeMsg:
 
 
 async def make_gateway_stack(board_lines=None, accounts=None, redis_client=None):
-    """A real GameServer (WS Gateway) + a real GameShard, wired together
-    exactly as docker-compose.yml wires the two actual services - only
-    NATS itself is faked (see FakeNatsClient), the same way this file
-    already fakes Redis (fakeredis) for its real-socket tests."""
+    """A real GameServer (WS Gateway) + a real GameShard + a real
+    MatchmakerService, wired together exactly as docker-compose.yml wires
+    the three actual services - only NATS itself is faked (see
+    FakeNatsClient), the same way this file already fakes Redis
+    (fakeredis) for its real-socket tests."""
     nats_client = FakeNatsClient()
     redis_client = redis_client if redis_client is not None else fakeredis.FakeRedis()
     server = GameServer(config=settings, redis_client=redis_client, nats_client=nats_client)
     await server.start()
     shard = GameShard(nats_client, redis_client, config=settings, accounts=accounts, board_lines=board_lines)
     await nats_client.subscribe("shard.inbox", cb=shard.handle_message)
+    matchmaker = MatchmakerService(nats_client, redis_client)
+    await nats_client.subscribe("matchmaker.inbox", cb=matchmaker.handle_message)
     return server, shard, redis_client
 
 
@@ -84,16 +88,17 @@ async def _wait_for_a_snapshot(screen, canvas):
     await _wait_until(has_snapshot)
 
 
-async def _tick_loop(server, shard):
-    """Stands in for serve_forever's/shard.run_forever's own tick loops -
-    these tests drive websockets.serve directly (to reach into
-    `shard._rooms` without going through port-reporting indirection), so
-    they need to advance both the Gateway's (matchmaking timeouts) and the
-    Shard's (in-room real-time motion) clocks themselves, the same way
-    production does with two separate processes each ticking their own."""
+async def _tick_loop(shard):
+    """Stands in for shard.run_forever's own tick loop - these tests drive
+    websockets.serve directly (to reach into `shard._rooms` without going
+    through port-reporting indirection), so they need to advance the
+    Shard's clock (in-room real-time motion) themselves, the same way
+    production does in its own separate process. GameServer itself has no
+    periodic tick of its own anymore (see server/ws_server.py's
+    serve_forever) - matchmaking timeouts are server/matchmaker_service.py's
+    job now, and none of these tests run long enough to hit one."""
     while True:
         await asyncio.sleep(0.05)
-        await server.tick()
         await shard.tick()
 
 
@@ -171,7 +176,7 @@ def test_a_real_gui_click_reaches_the_real_server_and_moves_a_piece():
         async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
-            tick_task = asyncio.create_task(_tick_loop(server, shard))
+            tick_task = asyncio.create_task(_tick_loop(shard))
             events, session, pump = await _connect(url)
             events_b, session_b, pump_b = await _connect(url)
             try:
@@ -224,7 +229,7 @@ def test_two_real_clients_playing_through_the_full_stack_see_the_same_state():
         async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
-            tick_task = asyncio.create_task(_tick_loop(server, shard))
+            tick_task = asyncio.create_task(_tick_loop(shard))
             events_a, session_a, pump_a = await _connect(url)
             events_b, session_b, pump_b = await _connect(url)
             try:
@@ -269,7 +274,7 @@ def test_three_real_clients_room_third_joiner_is_a_viewer_and_cannot_move():
         async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
-            tick_task = asyncio.create_task(_tick_loop(server, shard))
+            tick_task = asyncio.create_task(_tick_loop(shard))
             events_a, session_a, pump_a = await _connect(url)
             events_b, session_b, pump_b = await _connect(url)
             events_c, session_c, pump_c = await _connect(url)
@@ -347,7 +352,7 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
             api_gateway_url = str(api_gateway.make_url(""))
-            tick_task = asyncio.create_task(_tick_loop(server, shard))
+            tick_task = asyncio.create_task(_tick_loop(shard))
             events_a, session_a, pump_a = await _connect(url, api_gateway_url)
             login_a = LoginScreen(session_a, events_a)
             session_b = None
@@ -446,7 +451,7 @@ def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
         async with websockets.serve(server.handle_connection, "127.0.0.1", 0) as ws_server:
             port = ws_server.sockets[0].getsockname()[1]
             url = f"ws://127.0.0.1:{port}"
-            tick_task = asyncio.create_task(_tick_loop(server, shard))
+            tick_task = asyncio.create_task(_tick_loop(shard))
             events_a, session_a, pump_a = await _connect(url)
             events_b, session_b, pump_b = await _connect(url)
             screen_a = GameScreen(settings, session_a, events_a, board_x_offset=SIDE_PANEL_WIDTH)

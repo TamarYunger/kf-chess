@@ -58,7 +58,7 @@ Server -> client (JSON-encoded):
           client shows room_id as a persistent header for as long as it's
           in that room (view/game_screen.py)
     {"type": "no_match", "payload": null}
-        - PLAY timed out (server.ws_server.MATCHMAKING_TIMEOUT_SECONDS)
+        - PLAY timed out (server.matchmaker_service.MATCHMAKING_TIMEOUT_SECONDS)
           with no compatible opponent found
     {"type": "opponent_disconnected", "payload": {"color": str, "grace_period_seconds": int}}
         - the player seated as `color` dropped connection; they have

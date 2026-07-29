@@ -6,6 +6,7 @@ import fakeredis
 import websockets
 
 from config import settings
+from server.matchmaker_service import MatchmakerService
 from server.protocol import parse_command
 from server.shard import GameShard
 from server.ws_server import GameServer, _default_nats_client, serve_forever
@@ -101,12 +102,12 @@ async def authenticate(server, connection, username, rating=1200):
 
 
 async def make_stack(board_lines=None):
-    """A GameServer + a GameShard sharing one FakeNatsClient and one
-    fakeredis - the whole split, end to end, without a real NATS/Redis or
-    even real sockets. This is what proves the round trip (WS Gateway ->
-    NATS -> Shard -> NATS -> WS Gateway -> real connection) genuinely
-    works, not just that each side works in isolation (which is all the
-    rest of this file's tests check)."""
+    """A GameServer + a GameShard + a MatchmakerService sharing one
+    FakeNatsClient and one fakeredis - the whole split, end to end, without
+    a real NATS/Redis or even real sockets. This is what proves the round
+    trip (WS Gateway -> NATS -> Matchmaker/Shard -> NATS -> WS Gateway ->
+    real connection) genuinely works, not just that each side works in
+    isolation (which is all the rest of this file's tests check)."""
     nats_client = FakeNatsClient()
     redis_client = fakeredis.FakeRedis()
     server = make_server(redis_client=redis_client, nats_client=nats_client)
@@ -114,6 +115,8 @@ async def make_stack(board_lines=None):
     shard = GameShard(nats_client, redis_client, config=settings,
                        board_lines=board_lines or ["wK . .", ". . .", ". . ."])
     await nats_client.subscribe("shard.inbox", cb=shard.handle_message)
+    matchmaker = MatchmakerService(nats_client, redis_client)
+    await nats_client.subscribe("matchmaker.inbox", cb=matchmaker.handle_message)
     return server, shard, redis_client
 
 
@@ -280,7 +283,10 @@ def test_auth_token_is_single_use():
     run(scenario())
 
 
-# -- PLAY / matchmaking: forwarding only, Shard behavior is test_shard.py's ---
+# -- PLAY / matchmaking: forwarding only, actual matching is -----------------
+# tests/test_matchmaker_service.py's - GameServer no longer runs
+# find_opponent or holds a waiting queue itself (see server/ws_server.py's
+# own docstring for why: a queue here would be per-Gateway-instance).
 
 
 def test_play_before_auth_is_rejected():
@@ -296,7 +302,7 @@ def test_play_before_auth_is_rejected():
     run(scenario())
 
 
-def test_a_lone_play_request_just_queues_with_no_shard_message():
+def test_play_forwards_a_play_envelope_to_the_matchmaker():
     async def scenario():
         server = make_server()
         conn = FakeConnection()
@@ -304,46 +310,12 @@ def test_a_lone_play_request_just_queues_with_no_shard_message():
 
         await server._handle_play(conn)
 
-        assert conn in server._queue
-        assert server._nats.published == []  # nothing to match yet
-
-    run(scenario())
-
-
-def test_matched_pair_publishes_a_match_envelope_with_both_players():
-    async def scenario():
-        server = make_server()
-        alice, bob = FakeConnection(), FakeConnection()
-        await authenticate(server, alice, "alice")
-        await authenticate(server, bob, "bob")
-
-        await server._handle_play(alice)
-        await server._handle_play(bob)
-
-        assert server._queue == {}
         subject, payload = server._nats.published[0]
-        assert subject == "shard.inbox"
+        assert subject == "matchmaker.inbox"
         envelope = json.loads(payload)
-        assert envelope["kind"] == "match"
-        connection_ids = {p["connection_id"] for p in envelope["players"]}
-        assert connection_ids == {server._connection_ids[alice], server._connection_ids[bob]}
-
-    run(scenario())
-
-
-def test_incompatible_ratings_are_not_matched():
-    async def scenario():
-        server = make_server()
-        alice, bob = FakeConnection(), FakeConnection()
-        await authenticate(server, alice, "alice", rating=1000)
-        await authenticate(server, bob, "bob", rating=1500)  # outside +-100 range
-
-        await server._handle_play(alice)
-        await server._handle_play(bob)
-
-        assert alice in server._queue
-        assert bob in server._queue
-        assert server._nats.published == []
+        assert envelope == {
+            "connection_id": server._connection_ids[conn], "username": "alice", "rating": 1200,
+        }
 
     run(scenario())
 
@@ -360,56 +332,7 @@ def test_play_again_once_already_in_a_room_is_a_no_op():
 
         await server._handle_play(conn)
 
-        assert server._nats.published == []  # no second match attempted
-
-    run(scenario())
-
-
-def test_play_again_while_still_queued_is_a_no_op():
-    async def scenario():
-        server = make_server()
-        conn = FakeConnection()
-        await authenticate(server, conn, "alice")
-        await server._handle_play(conn)
-        assert conn in server._queue
-
-        await server._handle_play(conn)
-
-        assert server._nats.published == []  # still just queued, not matched twice
-
-    run(scenario())
-
-
-def test_matchmaking_timeout_sends_no_match_and_clears_the_queue():
-    async def scenario():
-        server = make_server()
-        conn = FakeConnection()
-        await authenticate(server, conn, "alice")
-        await server._handle_play(conn)
-        assert conn in server._queue
-
-        server._queue[conn]["queued_at"] -= 61  # older than MATCHMAKING_TIMEOUT_SECONDS
-        await server._resolve_matchmaking_timeouts(time.monotonic())
-
-        assert conn not in server._queue
-        no_match = json.loads(conn.sent[-1])
-        assert no_match == {"type": "no_match", "payload": None}
-
-    run(scenario())
-
-
-def test_matchmaking_timeout_does_not_fire_early():
-    async def scenario():
-        server = make_server()
-        conn = FakeConnection()
-        await authenticate(server, conn, "alice")
-        await server._handle_play(conn)
-        sent_before = len(conn.sent)
-
-        await server._resolve_matchmaking_timeouts(time.monotonic())  # not yet 60s
-
-        assert conn in server._queue
-        assert len(conn.sent) == sent_before
+        assert server._nats.published == []  # nothing forwarded to the matchmaker
 
     run(scenario())
 

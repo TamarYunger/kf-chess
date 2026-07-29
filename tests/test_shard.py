@@ -1,8 +1,9 @@
 """server/shard.py's own tests - GameShard driven directly with envelope
-dicts (the shape server/ws_server.py publishes to INBOX_SUBJECT), against
-a fake NATS client and a fakeredis registry - mirrors tests/test_ws_server.py's
-FakeConnection convention, just one layer further down the stack (a NATS
-message instead of a raw websocket frame).
+dicts (the shape server/ws_server.py and server/allocator_service.py
+publish to this instance's own inbox subject), against a fake NATS client
+and a fakeredis registry - mirrors tests/test_ws_server.py's FakeConnection
+convention, just one layer further down the stack (a NATS message instead
+of a raw websocket frame).
 """
 import asyncio
 import json
@@ -11,7 +12,7 @@ from types import SimpleNamespace
 import fakeredis
 
 from config import settings
-from server.shard import GameShard, INBOX_SUBJECT, run_forever
+from server.shard import INBOX_SUBJECT_TEMPLATE, PRESENCE_TTL_SECONDS, GameShard, run_forever
 
 
 class FakeNatsClient:
@@ -32,12 +33,12 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def make_shard(board_lines=None, accounts=None):
+def make_shard(board_lines=None, accounts=None, instance_id="instance-a"):
     nats_client = FakeNatsClient()
     redis_client = fakeredis.FakeRedis()
     shard = GameShard(
         nats_client, redis_client, config=settings, accounts=accounts,
-        board_lines=board_lines or ["wK . .", ". . .", ". . ."],
+        board_lines=board_lines or ["wK . .", ". . .", ". . ."], instance_id=instance_id,
     )
     return shard, nats_client, redis_client
 
@@ -50,9 +51,9 @@ def messages_for(nats_client, connection_id):
     """Every message actually addressed to connection_id, decoded, in the
     order they were published - regardless of which instance's outbox
     subject they went out on. Only looks at outbox.* publishes - other
-    tests in this file also publish directly to INBOX_SUBJECT themselves
-    (see send()/test_run_forever_...), whose envelopes aren't shaped like
-    an outbox one at all (no "message" key)."""
+    tests in this file also publish directly to a shard inbox subject
+    themselves (see send()/test_run_forever_...), whose envelopes aren't
+    shaped like an outbox one at all (no "message" key)."""
     messages = []
     for subject, payload in nats_client.published:
         if not subject.startswith("outbox."):
@@ -67,20 +68,25 @@ async def send(shard, envelope):
     await shard.handle_message(SimpleNamespace(data=json.dumps(envelope).encode("utf-8")))
 
 
-def test_room_create_seats_the_creator_and_replies_with_a_room_message():
+async def create_room(shard, room_id, players):
+    """The shape server/allocator_service.py publishes once it's already
+    picked this instance and reserved room_id's lease - one player for a
+    ROOM CREATE, two for a Matchmaker-found match."""
+    await send(shard, {"kind": "create_room", "room_id": room_id, "players": players})
+
+
+def test_create_room_with_one_player_seats_the_creator_and_replies_with_a_room_message():
     async def scenario():
         shard, nats_client, redis_client = make_shard()
         register(redis_client, "conn-1")
 
-        await send(shard, {
-            "kind": "command", "connection_id": "conn-1", "username": "alice", "rating": 1200,
-            "room_id": None, "raw": "ROOM CREATE",
-        })
+        await create_room(shard, "room1", [{"connection_id": "conn-1", "username": "alice", "rating": 1200}])
 
         replies = messages_for(nats_client, "conn-1")
         assert replies[0]["type"] == "room"
         assert replies[0]["payload"]["role"] in settings.COLORS
-        assert len(shard._rooms) == 1
+        assert replies[0]["payload"]["room_id"] == "room1"
+        assert set(shard._rooms) == {"room1"}
 
     run(scenario())
 
@@ -91,21 +97,17 @@ def test_room_join_seats_the_second_connection_as_the_second_color():
         register(redis_client, "conn-1")
         register(redis_client, "conn-2")
 
-        await send(shard, {
-            "kind": "command", "connection_id": "conn-1", "username": "alice", "rating": 1200,
-            "room_id": None, "raw": "ROOM CREATE",
-        })
-        room_id = messages_for(nats_client, "conn-1")[0]["payload"]["room_id"]
+        await create_room(shard, "room1", [{"connection_id": "conn-1", "username": "alice", "rating": 1200}])
 
         await send(shard, {
             "kind": "command", "connection_id": "conn-2", "username": "bob", "rating": 1200,
-            "room_id": None, "raw": f"ROOM JOIN {room_id}",
+            "room_id": None, "raw": "ROOM JOIN room1",
         })
 
         joiner_reply = messages_for(nats_client, "conn-2")[0]
         assert joiner_reply["type"] == "room"
-        assert joiner_reply["payload"]["room_id"] == room_id
-        room = shard._rooms[room_id]
+        assert joiner_reply["payload"]["room_id"] == "room1"
+        room = shard._rooms["room1"]
         assert {room.role_of(shard._proxy_for("conn-1")), room.role_of(shard._proxy_for("conn-2"))} == \
             set(settings.COLORS)
 
@@ -134,19 +136,16 @@ def test_matched_pair_are_both_welcomed_into_the_same_new_room():
         register(redis_client, "conn-1")
         register(redis_client, "conn-2")
 
-        await send(shard, {
-            "kind": "match",
-            "players": [
-                {"connection_id": "conn-1", "username": "alice", "rating": 1200},
-                {"connection_id": "conn-2", "username": "bob", "rating": 1200},
-            ],
-        })
+        await create_room(shard, "room1", [
+            {"connection_id": "conn-1", "username": "alice", "rating": 1200},
+            {"connection_id": "conn-2", "username": "bob", "rating": 1200},
+        ])
 
         alice_room = messages_for(nats_client, "conn-1")[0]
         bob_room = messages_for(nats_client, "conn-2")[0]
         assert alice_room["type"] == "room"
         assert bob_room["type"] == "room"
-        assert alice_room["payload"]["room_id"] == bob_room["payload"]["room_id"]
+        assert alice_room["payload"]["room_id"] == bob_room["payload"]["room_id"] == "room1"
         assert {alice_room["payload"]["role"], bob_room["payload"]["role"]} == set(settings.COLORS)
 
     run(scenario())
@@ -158,18 +157,14 @@ def test_move_in_a_room_broadcasts_to_both_seated_connections():
         register(redis_client, "conn-1")
         register(redis_client, "conn-2")
 
-        await send(shard, {
-            "kind": "match",
-            "players": [
-                {"connection_id": "conn-1", "username": "alice", "rating": 1200},
-                {"connection_id": "conn-2", "username": "bob", "rating": 1200},
-            ],
-        })
-        room_id = messages_for(nats_client, "conn-1")[0]["payload"]["room_id"]
+        await create_room(shard, "room1", [
+            {"connection_id": "conn-1", "username": "alice", "rating": 1200},
+            {"connection_id": "conn-2", "username": "bob", "rating": 1200},
+        ])
 
         await send(shard, {
             "kind": "command", "connection_id": "conn-1", "username": "alice", "rating": 1200,
-            "room_id": room_id, "raw": "MOVE a3 c3",
+            "room_id": "room1", "raw": "MOVE a3 c3",
         })
 
         # Both sides should have received a snapshot reflecting the move -
@@ -235,18 +230,14 @@ def test_disconnect_starts_the_room_grace_period():
         register(redis_client, "conn-1")
         register(redis_client, "conn-2")
 
-        await send(shard, {
-            "kind": "match",
-            "players": [
-                {"connection_id": "conn-1", "username": "alice", "rating": 1200},
-                {"connection_id": "conn-2", "username": "bob", "rating": 1200},
-            ],
-        })
-        room_id = messages_for(nats_client, "conn-1")[0]["payload"]["room_id"]
-        room = shard._rooms[room_id]
+        await create_room(shard, "room1", [
+            {"connection_id": "conn-1", "username": "alice", "rating": 1200},
+            {"connection_id": "conn-2", "username": "bob", "rating": 1200},
+        ])
+        room = shard._rooms["room1"]
         alice_color = room.role_of(shard._proxy_for("conn-1"))  # before disconnect pops the seat
 
-        await send(shard, {"kind": "disconnect", "connection_id": "conn-1", "room_id": room_id})
+        await send(shard, {"kind": "disconnect", "connection_id": "conn-1", "room_id": "room1"})
 
         assert alice_color in room._disconnected
 
@@ -262,38 +253,20 @@ def test_disconnect_for_an_unknown_room_or_connection_is_harmless():
     run(scenario())  # must not raise
 
 
-def test_new_room_regenerates_its_id_on_a_collision(monkeypatch):
-    # secrets.token_hex(3) is 16M+ combinations - a real collision is not
-    # something a test can wait for, so this forces one: the first id it
-    # returns is already taken, so _generate_room_id must retry.
-    shard, nats_client, redis_client = make_shard()
-    shard._rooms["aaaaaa"] = object()
-    ids = iter(["aaaaaa", "bbbbbb"])
-    monkeypatch.setattr("server.shard.secrets.token_hex", lambda n: next(ids))
-
-    room = shard._new_room()
-
-    assert room.room_id == "bbbbbb"
-
-
 def test_room_join_reconnect_notifies_the_opponent_still_in_the_room():
     async def scenario():
         shard, nats_client, redis_client = make_shard()
         register(redis_client, "conn-1")
         register(redis_client, "conn-2")
 
-        await send(shard, {
-            "kind": "match",
-            "players": [
-                {"connection_id": "conn-1", "username": "alice", "rating": 1200},
-                {"connection_id": "conn-2", "username": "bob", "rating": 1200},
-            ],
-        })
-        room_id = messages_for(nats_client, "conn-1")[0]["payload"]["room_id"]
-        room = shard._rooms[room_id]
+        await create_room(shard, "room1", [
+            {"connection_id": "conn-1", "username": "alice", "rating": 1200},
+            {"connection_id": "conn-2", "username": "bob", "rating": 1200},
+        ])
+        room = shard._rooms["room1"]
         bob_role = room.role_of(shard._proxy_for("conn-2"))
 
-        await send(shard, {"kind": "disconnect", "connection_id": "conn-2", "room_id": room_id})
+        await send(shard, {"kind": "disconnect", "connection_id": "conn-2", "room_id": "room1"})
 
         # A fresh connection_id reconnecting as the same username reclaims
         # bob's seat - a real WS Gateway would give the reconnecting socket
@@ -301,7 +274,7 @@ def test_room_join_reconnect_notifies_the_opponent_still_in_the_room():
         register(redis_client, "conn-2-reconnect")
         await send(shard, {
             "kind": "command", "connection_id": "conn-2-reconnect", "username": "bob", "rating": 1200,
-            "room_id": None, "raw": f"ROOM JOIN {room_id}",
+            "room_id": None, "raw": "ROOM JOIN room1",
         })
 
         assert room.role_of(shard._proxy_for("conn-2-reconnect")) == bob_role
@@ -313,7 +286,34 @@ def test_room_join_reconnect_notifies_the_opponent_still_in_the_room():
     run(scenario())
 
 
-def test_run_forever_subscribes_and_ticks_until_cancelled():
+def test_tick_heartbeats_this_instance_and_renews_every_room_lease():
+    async def scenario():
+        shard, nats_client, redis_client = make_shard(instance_id="instance-a")
+        register(redis_client, "conn-1")
+        await create_room(shard, "room1", [{"connection_id": "conn-1", "username": "alice", "rating": 1200}])
+
+        await shard.tick()
+
+        assert redis_client.get("shard:heartbeat:instance-a") == b"1"  # one active room
+        assert redis_client.get("room_owner:room1").decode() == "instance-a"
+        assert redis_client.ttl("shard:heartbeat:instance-a") <= PRESENCE_TTL_SECONDS
+        assert redis_client.ttl("room_owner:room1") <= PRESENCE_TTL_SECONDS
+
+    run(scenario())
+
+
+def test_tick_heartbeats_zero_rooms_when_none_are_active():
+    async def scenario():
+        shard, nats_client, redis_client = make_shard(instance_id="instance-a")
+
+        await shard.tick()
+
+        assert redis_client.get("shard:heartbeat:instance-a") == b"0"
+
+    run(scenario())
+
+
+def test_run_forever_subscribes_to_this_instances_own_subject_and_ticks_until_cancelled():
     async def scenario():
         nats_client = FakeNatsClient()
         redis_client = fakeredis.FakeRedis()
@@ -321,16 +321,16 @@ def test_run_forever_subscribes_and_ticks_until_cancelled():
 
         task = asyncio.create_task(run_forever(
             nats_client, redis_client, config=settings, board_lines=["wK . .", ". . .", ". . ."],
-            on_ready=lambda shard: ready.setdefault("shard", shard),
+            on_ready=lambda shard: ready.setdefault("shard", shard), instance_id="instance-a",
         ))
         await asyncio.sleep(0.15)  # let it subscribe and tick at least once
         task.cancel()
 
         assert "shard" in ready
         register(redis_client, "conn-1")
-        await nats_client.publish(INBOX_SUBJECT, json.dumps({
-            "kind": "command", "connection_id": "conn-1", "username": "alice", "rating": 1200,
-            "room_id": None, "raw": "ROOM CREATE",
+        await nats_client.publish(INBOX_SUBJECT_TEMPLATE.format(instance_id="instance-a"), json.dumps({
+            "kind": "create_room", "room_id": "room1",
+            "players": [{"connection_id": "conn-1", "username": "alice", "rating": 1200}],
         }).encode("utf-8"))
         assert messages_for(nats_client, "conn-1")[0]["type"] == "room"
 

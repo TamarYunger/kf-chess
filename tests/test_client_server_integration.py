@@ -15,6 +15,7 @@ from aiohttp.test_utils import TestServer
 
 from bus.event_bus import EventBus
 from config import settings
+from server.allocator_service import AllocatorService
 from server.api_gateway import build_app as build_api_gateway_app
 from server.db import AccountStore
 from server.matchmaker_service import MatchmakerService
@@ -53,18 +54,25 @@ class _FakeMsg:
 
 async def make_gateway_stack(board_lines=None, accounts=None, redis_client=None):
     """A real GameServer (WS Gateway) + a real GameShard + a real
-    MatchmakerService, wired together exactly as docker-compose.yml wires
-    the three actual services - only NATS itself is faked (see
-    FakeNatsClient), the same way this file already fakes Redis
-    (fakeredis) for its real-socket tests."""
+    MatchmakerService + a real AllocatorService, wired together exactly as
+    docker-compose.yml wires the four actual services - only NATS itself
+    is faked (see FakeNatsClient), the same way this file already fakes
+    Redis (fakeredis) for its real-socket tests. The Shard's own tick() is
+    called once up front to seed its heartbeat before returning - see
+    tests/test_ws_server.py's make_stack for why the Allocator needs that
+    to have happened at least once before it can pick this instance."""
     nats_client = FakeNatsClient()
     redis_client = redis_client if redis_client is not None else fakeredis.FakeRedis()
     server = GameServer(config=settings, redis_client=redis_client, nats_client=nats_client)
     await server.start()
-    shard = GameShard(nats_client, redis_client, config=settings, accounts=accounts, board_lines=board_lines)
-    await nats_client.subscribe("shard.inbox", cb=shard.handle_message)
+    shard = GameShard(nats_client, redis_client, config=settings, accounts=accounts, board_lines=board_lines,
+                       instance_id="shard-a")
+    await nats_client.subscribe("shard.inbox.shard-a", cb=shard.handle_message)
+    await shard.tick()
     matchmaker = MatchmakerService(nats_client, redis_client)
     await nats_client.subscribe("matchmaker.inbox", cb=matchmaker.handle_message)
+    allocator = AllocatorService(nats_client, redis_client)
+    await nats_client.subscribe("allocator.inbox", cb=allocator.handle_message)
     return server, shard, redis_client
 
 

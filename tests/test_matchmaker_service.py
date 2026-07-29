@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import fakeredis
 
 from server.matchmaker_service import (
-    INBOX_SUBJECT, MatchmakerService, QUEUE_KEY, SHARD_INBOX_SUBJECT, run_forever,
+    ALLOCATOR_INBOX_SUBJECT, INBOX_SUBJECT, MatchmakerService, QUEUE_KEY, run_forever,
 )
 
 
@@ -73,7 +73,7 @@ def test_a_lone_play_request_just_queues_with_no_match_published():
     run(scenario())
 
 
-def test_compatible_pair_publishes_a_match_envelope_and_clears_the_queue():
+def test_compatible_pair_forwards_a_need_room_envelope_to_the_allocator():
     async def scenario():
         service, nats_client, redis_client = make_service()
 
@@ -82,9 +82,8 @@ def test_compatible_pair_publishes_a_match_envelope_and_clears_the_queue():
 
         assert redis_client.hgetall(QUEUE_KEY) == {}
         subject, payload = nats_client.published[0]
-        assert subject == SHARD_INBOX_SUBJECT
+        assert subject == ALLOCATOR_INBOX_SUBJECT
         envelope = json.loads(payload)
-        assert envelope["kind"] == "match"
         connection_ids = {p["connection_id"] for p in envelope["players"]}
         assert connection_ids == {"conn-1", "conn-2"}
 

@@ -1,28 +1,45 @@
 """server/shard.py: a Game Server Shard - hosts every live server.room.Room
 (and its GameEngine, the sole source of truth for game rules) on this one
 process, exactly like server.ws_server.GameServer used to before the
-split. The only thing that changed is *how* it's reached: commands arrive
-as NATS messages instead of directly from a websockets connection (see
-server/ws_server.py, now the WS Gateway - it holds the real sockets, this
-process never does), and every reply/broadcast goes out through a
-server.nats_connection.NatsConnectionProxy instead of a real connection -
-Room itself (server/room.py) is completely unaware any of this happened;
-it still just calls connection.send(...).
+split. Commands arrive as NATS messages instead of directly from a
+websockets connection (see server/ws_server.py, now the WS Gateway - it
+holds the real sockets, this process never does), and every reply/
+broadcast goes out through a server.nats_connection.NatsConnectionProxy
+instead of a real connection - Room itself (server/room.py) is completely
+unaware any of this happened; it still just calls connection.send(...).
 
-Envelopes arriving on INBOX_SUBJECT (published by ws_server.py) are one of:
+Unlike server/ws_server.py's shared outbox-per-instance scheme, each Shard
+subscribes to its *own* inbox subject (INBOX_SUBJECT_TEMPLATE, keyed by
+`instance_id`) rather than one subject every replica would otherwise all
+receive - see server/allocator_service.py's own docstring for why: once
+more than one Shard replica exists, "which one" a new room lands on is a
+real decision (the Allocator's job), not something every replica can just
+independently decide for itself off a shared subject anymore.
+
+This Shard also periodically reports its own liveness/capacity to Redis
+(`shard:heartbeat:{instance_id}` -> its current room count, the Allocator's
+power-of-two-choices input) and renews a lease on every room_id it
+currently hosts (`room_owner:{room_id}` -> instance_id, both under
+PRESENCE_TTL_SECONDS) - see tick(). That lease is what lets
+server/ws_server.py route ROOM_JOIN/MOVE/JUMP/SELECT/disconnect to the
+right Shard instance, and what keeps that routing table from pointing at
+a Shard that's actually crashed forever (the TTL simply lapses instead).
+
+Envelopes arriving on this instance's own inbox subject are one of:
   {"kind": "command", "connection_id": str, "username": str, "rating": int,
    "room_id": str | None, "raw": str}
       - `raw` is an ordinary server.protocol.py wire command ("MOVE a3 c3",
-        "ROOM CREATE", ...) - the same text a client would have sent
+        "ROOM JOIN abc123", ...) - the same text a client would have sent
         directly before this split existed. `room_id` is only needed for
         MOVE/JUMP/SELECT (ws_server.py already tracks which room a
-        connection is in); ROOM_CREATE/ROOM_JOIN carry `username`/`rating`
-        instead, since a room might not exist to look either up from yet.
-  {"kind": "match", "players": [{"connection_id", "username", "rating"}, ...]}
-      - PLAY's matchmaking found a pair (still decided in ws_server.py,
-        server.matchmaking.find_opponent is unchanged) - seats both in one
-        new room together, same as GameServer._handle_play used to do
-        directly.
+        connection is in); ROOM_JOIN carries `username`/`rating` instead,
+        since the joiner might be a reconnect the room needs to reclaim.
+  {"kind": "create_room", "room_id": str,
+   "players": [{"connection_id", "username", "rating"}, ...]}
+      - server/allocator_service.py has already picked *this* instance and
+        reserved `room_id`'s ownership lease in Redis - just create the
+        Room and seat everyone in `players` (one, for ROOM CREATE; two,
+        for a Matchmaker-found match).
   {"kind": "disconnect", "connection_id": str, "room_id": str}
       - the real socket for connection_id dropped (ws_server.py's
         handle_connection loop ending) - Room.handle_disconnect starts the
@@ -34,7 +51,7 @@ import asyncio
 import json
 import logging
 import os
-import secrets
+import socket
 import time
 
 from board.loaders import load_text_board
@@ -53,13 +70,23 @@ from server.room import Room
 
 logger = logging.getLogger(__name__)
 
-INBOX_SUBJECT = "shard.inbox"
+# Keyed by instance_id, not a plain subject string like server/
+# matchmaker_service.py's or server/allocator_service.py's own INBOX_SUBJECT
+# - see this module's own docstring for why.
+INBOX_SUBJECT_TEMPLATE = "shard.inbox.{instance_id}"
 
 # Same cadence as ws_server.py's own TICK_INTERVAL_SECONDS - real-time
 # motion (a move landing, a rest cooldown expiring) has to reach clients
 # without waiting for someone to send another command, exactly as before
 # the split.
 TICK_INTERVAL_SECONDS = 0.05
+
+# TTL for both this Shard's heartbeat and every room_id lease it renews
+# (see tick()) - long enough that renewing once per TICK_INTERVAL_SECONDS
+# tolerates a brief Redis hiccup without a spurious expiry, short enough
+# that a genuinely crashed Shard's entries clear out in a few seconds
+# rather than lingering forever.
+PRESENCE_TTL_SECONDS = 10
 
 STANDARD_BOARD_TEXT = [
     "bR bN bB bQ bK bB bN bR",
@@ -92,13 +119,19 @@ class GameShard:
     `accounts` is only needed by Room itself (Elo updates on game_over) -
     this class never checks a password (see server/api_gateway.py) or a
     token (see server/ws_server.py's own _handle_auth) - both already
-    happened before a command ever reaches here.
+    happened before a command ever reaches here. `instance_id` identifies
+    *this* Shard process/container - same role and default
+    (socket.gethostname()) as server/ws_server.py's GameServer, used both
+    for this instance's own inbox subject (see run_forever) and as the
+    value it heartbeats/leases into Redis (see tick()).
     """
 
-    def __init__(self, nats_client, redis_client, config=settings, accounts=None, board_lines=None):
+    def __init__(self, nats_client, redis_client, config=settings, accounts=None, board_lines=None,
+                 instance_id=None):
         self._nats = nats_client
         self._redis = redis_client
         self._config = config
+        self._instance_id = instance_id or socket.gethostname()
         self._board_lines = board_lines or STANDARD_BOARD_TEXT
         self._colors = tuple(config.COLORS)
         self._accounts = accounts if accounts is not None else AccountStore()
@@ -112,38 +145,39 @@ class GameShard:
             self._proxies[connection_id] = proxy
         return proxy
 
-    def _new_room(self):
-        room_id = self._generate_room_id()
+    def _new_room(self, room_id):
         events = EventBus()
         engine = build_engine(self._board_lines, self._config, events=events)
         room = Room(room_id, engine, self._colors, self._accounts)
         self._rooms[room_id] = room
         return room
 
-    def _generate_room_id(self):
-        room_id = secrets.token_hex(3)
-        while room_id in self._rooms:
-            room_id = secrets.token_hex(3)
-        return room_id
-
     async def tick(self):
+        """Advances every Room's real-time clock, then reports this
+        instance's own liveness/capacity and renews every room_id lease it
+        currently holds - see this module's own docstring for why both
+        matter once more than one Shard replica exists."""
         now = time.monotonic()
         for room in list(self._rooms.values()):
             await room.tick(now)
+        self._redis.setex(f"shard:heartbeat:{self._instance_id}", PRESENCE_TTL_SECONDS, len(self._rooms))
+        for room_id in self._rooms:
+            self._redis.setex(f"room_owner:{room_id}", PRESENCE_TTL_SECONDS, self._instance_id)
 
     async def handle_message(self, msg):
-        """The NATS subscription callback for INBOX_SUBJECT - one envelope
-        per client command, matched pair, or disconnect, forwarded here by
-        server/ws_server.py. This is fire-and-forget delivery (see the
-        module docstring - not NATS request/reply), so there's no caller
-        waiting on this to propagate an exception to; a malformed envelope
-        or a bug here must not crash the whole shard process over one bad
-        message."""
+        """The NATS subscription callback for this instance's own inbox
+        subject - one envelope per room-creation instruction, client
+        command, or disconnect, forwarded here by server/ws_server.py or
+        server/allocator_service.py. This is fire-and-forget delivery (see
+        the module docstring - not NATS request/reply), so there's no
+        caller waiting on this to propagate an exception to; a malformed
+        envelope or a bug here must not crash the whole shard process over
+        one bad message."""
         try:
             envelope = json.loads(msg.data)
             kind = envelope.get("kind")
-            if kind == "match":
-                await self._handle_match(envelope["players"])
+            if kind == "create_room":
+                await self._handle_create_room(envelope["room_id"], envelope["players"])
             elif kind == "disconnect":
                 await self._handle_disconnect(envelope)
             else:
@@ -151,15 +185,17 @@ class GameShard:
         except Exception:
             logger.exception("failed to handle shard inbox message")
 
-    async def _handle_match(self, players):
-        # Seat *both* players before welcoming either - welcome() checks
-        # room.started to decide whether to send "waiting_for_opponent",
-        # and seating only one side first would make it True too early,
-        # sending that message to whoever got welcomed first even though
-        # their opponent is about to be seated a moment later (this
-        # mirrors the exact ordering server/ws_server.py's old
-        # _handle_play used before this split, for the same reason).
-        room = self._new_room()
+    async def _handle_create_room(self, room_id, players):
+        # server/allocator_service.py has already picked this instance and
+        # reserved room_id's lease - just create the Room and seat
+        # everyone (one player for ROOM CREATE, two for a Matchmaker-found
+        # match). Every player is seated *before* welcoming any of them -
+        # welcome() checks room.started to decide whether to send
+        # "waiting_for_opponent", and seating only one side first would
+        # make it True too early for a 2-player match, sending that
+        # message to whoever got welcomed first even though their
+        # opponent is about to be seated a moment later.
+        room = self._new_room(room_id)
         proxies_and_roles = []
         for player in players:
             proxy = self._proxy_for(player["connection_id"])
@@ -182,11 +218,6 @@ class GameShard:
             await proxy.send(json.dumps(encode_error(str(error))))
             return
 
-        if command.verb == "ROOM_CREATE":
-            room = self._new_room()
-            role = room.seat_or_view(proxy, envelope["username"], envelope["rating"])
-            await room.welcome(proxy, role)
-            return
         if command.verb == "ROOM_JOIN":
             await self._handle_room_join(proxy, envelope, command.args[0])
             return
@@ -215,13 +246,18 @@ class GameShard:
             await room.notify_room_started(exclude=proxy)
 
 
-async def run_forever(nats_client, redis_client, config=settings, accounts=None, board_lines=None, on_ready=None):
+async def run_forever(nats_client, redis_client, config=settings, accounts=None, board_lines=None, on_ready=None,
+                       instance_id=None):
     """Runs the shard until cancelled. `on_ready(shard)` is called once the
     NATS subscription is actually active - mirrors server/ws_server.py's
     serve_forever's own on_ready, mainly so tests can reach the shard
-    instance without a module-level global."""
-    shard = GameShard(nats_client, redis_client, config=config, accounts=accounts, board_lines=board_lines)
-    await nats_client.subscribe(INBOX_SUBJECT, cb=shard.handle_message)
+    instance without a module-level global. `instance_id` is resolved once
+    here (rather than read back off `shard._instance_id`) since it's also
+    needed to build the subscription subject itself."""
+    instance_id = instance_id or socket.gethostname()
+    shard = GameShard(nats_client, redis_client, config=config, accounts=accounts, board_lines=board_lines,
+                       instance_id=instance_id)
+    await nats_client.subscribe(INBOX_SUBJECT_TEMPLATE.format(instance_id=instance_id), cb=shard.handle_message)
     if on_ready is not None:
         on_ready(shard)
     while True:

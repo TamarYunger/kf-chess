@@ -11,10 +11,14 @@ PLAY requests arrive as NATS envelopes on INBOX_SUBJECT (published by
 server/ws_server.py's _handle_play, once it's confirmed the connection is
 authenticated and not already in a room - this service never checks either
 of those itself, same division of responsibility server/shard.py's own
-docstring describes for MOVE/JUMP). A match publishes the exact same
-"match" envelope server/shard.py's GameShard._handle_match already expects
-on its own inbox (SHARD_INBOX_SUBJECT) - shard.py needed no changes at all
-for this split. A timeout instead sends "no_match" back through
+docstring describes for MOVE/JUMP). A match forwards a "need_room" request
+(the same shape server/ws_server.py's own ROOM CREATE forwards, just with
+two players instead of one) to server/allocator_service.py's Allocator
+(ALLOCATOR_INBOX_SUBJECT) rather than publishing straight to a Shard - see
+that module's own docstring for why picking *which* Shard replica hosts a
+new room is a real decision now, not something this service (or
+server/shard.py itself) can still assume there's only ever one answer to.
+A timeout instead sends "no_match" back through
 server.nats_connection.NatsConnectionProxy, the same way server/shard.py
 replies to a connection it doesn't hold a socket for either.
 """
@@ -36,11 +40,12 @@ logger = logging.getLogger(__name__)
 
 INBOX_SUBJECT = "matchmaker.inbox"
 
-# Same constant as server/ws_server.py's own INBOX_SUBJECT for server/
-# shard.py - duplicated deliberately rather than imported, so this service
-# never pulls in shard.py's GameEngine/Room import chain (same reasoning
-# ws_server.py's own docstring gives for its copy of this constant).
-SHARD_INBOX_SUBJECT = "shard.inbox"
+# Same constant as server/ws_server.py's own ALLOCATOR_INBOX_SUBJECT -
+# duplicated deliberately rather than imported, so this service never
+# pulls in server/allocator_service.py's own import chain (same reasoning
+# ws_server.py's own docstring gives for its copies of other services'
+# subject constants).
+ALLOCATOR_INBOX_SUBJECT = "allocator.inbox"
 
 QUEUE_KEY = "matchmaker:queue"
 
@@ -98,8 +103,7 @@ class MatchmakerService:
         opponent = json.loads(self._redis.hget(QUEUE_KEY, opponent_id))
         self._redis.hdel(QUEUE_KEY, opponent_id)
         logger.info("matched %s vs %s", envelope["username"], opponent["username"])
-        await self._nats.publish(SHARD_INBOX_SUBJECT, json.dumps({
-            "kind": "match",
+        await self._nats.publish(ALLOCATOR_INBOX_SUBJECT, json.dumps({
             "players": [
                 {"connection_id": connection_id, "username": envelope["username"], "rating": envelope["rating"]},
                 {"connection_id": opponent_id, "username": opponent["username"], "rating": opponent["rating"]},

@@ -1,11 +1,11 @@
 """The WS Gateway: a WebSocket server that authenticates connections
 (AUTH, checked against a token server.api_gateway.py issued after its own
 REST /login - this class never sees a password) and forwards PLAY/ROOM
-CREATE/ROOM JOIN/MOVE/JUMP/SELECT to server/shard.py's Game Shard over
-NATS - it owns no server.room.Room/GameEngine itself at all anymore (see
-that module's own docstring for why: a Room and the real socket now live
-in two different processes, and Room can't reach a connection it doesn't
-have).
+CREATE/ROOM JOIN/MOVE/JUMP/SELECT to server/shard.py's Game Shard replicas
+over NATS - it owns no server.room.Room/GameEngine itself at all anymore
+(see that module's own docstring for why: a Room and the real socket now
+live in two different processes, and Room can't reach a connection it
+doesn't have).
 
 The one piece of game-adjacent state this class still keeps is
 `_connection_room` (connection -> room_id) - purely local bookkeeping so
@@ -14,6 +14,22 @@ room_id to attach to its own outgoing envelope. It learns a room_id the
 same way it learns everything else the shard did - by relaying a "room"
 message back to the client (see _handle_outbox_message) - it never asks
 the shard directly.
+
+Unlike the single-Shard days, there's no one shared shard inbox subject to
+publish room-scoped commands to anymore - see server/shard.py's own
+docstring for why (more than one Shard replica subscribing to the same
+subject would each independently act on the same message). Instead, every
+ROOM_JOIN/MOVE/JUMP/SELECT/disconnect looks up `room_owner:{room_id}` in
+Redis (server/allocator_service.py writes it when a room is first
+allocated; server/shard.py's own tick() renews it for as long as that
+instance still hosts the room) to find which Shard instance's own inbox
+subject to publish to - see _publish_to_shard. A missing/expired entry
+means "no such room right now" either way (never allocated, or its
+lease lapsed because the owning Shard crashed), so it's reported to the
+client the same way in both cases. ROOM CREATE has no room_id yet at all
+(that's exactly what needs deciding) - it forwards to server/
+allocator_service.py's Allocator instead, the same way PLAY forwards to
+the Matchmaker.
 """
 from __future__ import annotations
 
@@ -34,16 +50,22 @@ from server.safe_send import safe_send
 
 logger = logging.getLogger(__name__)
 
-# The subject server/shard.py's GameShard subscribes to for every command/
-# match/disconnect envelope - a plain string constant, not an import from
-# server.shard, so this module never pulls in the GameEngine/Room import
+# Same constant as server/shard.py's own INBOX_SUBJECT_TEMPLATE - keyed by
+# instance_id, not a plain subject string, since there's no single shared
+# shard inbox anymore (see this module's own docstring). Duplicated rather
+# than imported, so this module never pulls in the GameEngine/Room import
 # chain it no longer has any business needing.
-INBOX_SUBJECT = "shard.inbox"
+SHARD_INBOX_SUBJECT_TEMPLATE = "shard.inbox.{instance_id}"
 
 # The subject server/matchmaker_service.py's MatchmakerService subscribes
 # to for every PLAY request - same "duplicated constant, not imported"
-# reasoning as INBOX_SUBJECT above.
+# reasoning as SHARD_INBOX_SUBJECT_TEMPLATE above.
 MATCHMAKER_INBOX_SUBJECT = "matchmaker.inbox"
+
+# The subject server/allocator_service.py's AllocatorService subscribes to
+# for every need_room request (ROOM CREATE, or a Matchmaker-found match) -
+# same reasoning again.
+ALLOCATOR_INBOX_SUBJECT = "allocator.inbox"
 
 # Overridable via env because inside a container "localhost" means the
 # container's own loopback, which Docker's port-mapping can't reach - the
@@ -115,8 +137,11 @@ class GameServer:
         queue itself (see that module's own docstring for why: a queue
         here would be per-Gateway-*instance*, so two players PLAY-ing on
         two different instances would never be compared against each
-        other). ROOM CREATE/JOIN reach the Shard the same way, as
-        "command" envelopes.
+        other). ROOM CREATE forwards to server/allocator_service.py's
+        Allocator the same way, since there's no room_id yet to route by.
+        ROOM_JOIN/MOVE/JUMP/SELECT instead resolve `room_owner:{room_id}`
+        from Redis to find which Shard instance to publish a "command"
+        envelope to - see this module's own docstring.
     """
 
     def __init__(self, config=settings, redis_client=None, nats_client=None, instance_id=None):
@@ -158,8 +183,11 @@ class GameServer:
                     # The Shard's Room needs to know too, to start this
                     # seat's disconnect grace period (server/room.py's
                     # handle_disconnect) - it can't detect a dropped socket
-                    # itself, since it never held one.
-                    await self._publish_to_shard({
+                    # itself, since it never held one. A no-op if room_id's
+                    # lease is already gone (see _publish_to_shard) - the
+                    # room isn't reachable either way, and this connection
+                    # is closing regardless.
+                    await self._publish_to_shard(room_id, {
                         "kind": "disconnect", "connection_id": connection_id, "room_id": room_id,
                     })
 
@@ -177,10 +205,10 @@ class GameServer:
             await self._handle_play(connection)
             return
         if command.verb == "ROOM_CREATE":
-            await self._forward_command(connection, raw, room_id=None, verb_for_error="ROOM CREATE")
+            await self._handle_room_create(connection)
             return
         if command.verb == "ROOM_JOIN":
-            await self._forward_command(connection, raw, room_id=None, verb_for_error="ROOM JOIN")
+            await self._forward_command(connection, raw, room_id=command.args[0], verb_for_error="ROOM JOIN")
             return
 
         # MOVE / JUMP / SELECT - the only verbs left; route to this
@@ -243,6 +271,26 @@ class GameServer:
             "username": player["username"], "rating": player["rating"],
         }).encode("utf-8"))
 
+    # -- ROOM CREATE: allocator hop -------------------------------------------
+
+    async def _handle_room_create(self, connection):
+        """Forwards to server/allocator_service.py's Allocator, the same
+        way _handle_play forwards to the Matchmaker - there's no room_id
+        yet for this class to resolve a Shard instance from (that's
+        exactly what the Allocator decides), so it can't go through
+        _forward_command/_publish_to_shard like an existing room's
+        commands do."""
+        player = self._players.get(connection)
+        if player is None:
+            await self._safe_send(connection, json.dumps(encode_error("Must AUTH before ROOM CREATE")))
+            return
+        await self._nats.publish(ALLOCATOR_INBOX_SUBJECT, json.dumps({
+            "players": [{
+                "connection_id": self._connection_ids[connection],
+                "username": player["username"], "rating": player["rating"],
+            }],
+        }).encode("utf-8"))
+
     # -- Forwarding to the Shard ---------------------------------------------
 
     async def _forward_command(self, connection, raw, room_id, verb_for_error):
@@ -250,15 +298,33 @@ class GameServer:
         if player is None:
             await self._safe_send(connection, json.dumps(encode_error(f"Must AUTH before {verb_for_error}")))
             return
-        await self._publish_to_shard({
+        instance_id = await self._publish_to_shard(room_id, {
             "kind": "command",
             "connection_id": self._connection_ids[connection],
             "username": player["username"], "rating": player["rating"],
             "room_id": room_id, "raw": raw,
         })
+        if instance_id is None:
+            await self._safe_send(connection, json.dumps(encode_error(f"Room {room_id!r} not found")))
 
-    async def _publish_to_shard(self, envelope):
-        await self._nats.publish(INBOX_SUBJECT, json.dumps(envelope).encode("utf-8"))
+    async def _publish_to_shard(self, room_id, envelope):
+        """Looks up room_id's current owner in the room_owner registry
+        (see this module's own docstring for how that entry gets there
+        and why a missing one means "no such room right now" either way)
+        and publishes to that instance's own inbox subject. Returns the
+        instance_id published to, or None if there wasn't one - callers
+        decide for themselves whether that's worth telling the client
+        about (_forward_command does; the disconnect notification in
+        handle_connection doesn't need to, the connection's closing
+        regardless)."""
+        instance_id = self._redis.get(f"room_owner:{room_id}")
+        if instance_id is None:
+            return None
+        if isinstance(instance_id, bytes):
+            instance_id = instance_id.decode("utf-8")
+        await self._nats.publish(SHARD_INBOX_SUBJECT_TEMPLATE.format(instance_id=instance_id),
+                                  json.dumps(envelope).encode("utf-8"))
+        return instance_id
 
     async def _handle_outbox_message(self, msg):
         """The NATS subscription callback for this instance's own outbox

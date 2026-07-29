@@ -6,6 +6,7 @@ import fakeredis
 import websockets
 
 from config import settings
+from server.allocator_service import AllocatorService
 from server.matchmaker_service import MatchmakerService
 from server.protocol import parse_command
 from server.shard import GameShard
@@ -102,21 +103,30 @@ async def authenticate(server, connection, username, rating=1200):
 
 
 async def make_stack(board_lines=None):
-    """A GameServer + a GameShard + a MatchmakerService sharing one
-    FakeNatsClient and one fakeredis - the whole split, end to end, without
-    a real NATS/Redis or even real sockets. This is what proves the round
-    trip (WS Gateway -> NATS -> Matchmaker/Shard -> NATS -> WS Gateway ->
-    real connection) genuinely works, not just that each side works in
-    isolation (which is all the rest of this file's tests check)."""
+    """A GameServer + a GameShard + a MatchmakerService + an
+    AllocatorService sharing one FakeNatsClient and one fakeredis - the
+    whole split, end to end, without a real NATS/Redis or even real
+    sockets. This is what proves the round trip (WS Gateway -> NATS ->
+    Matchmaker/Allocator/Shard -> NATS -> WS Gateway -> real connection)
+    genuinely works, not just that each side works in isolation (which is
+    all the rest of this file's tests check). The Shard's own tick() is
+    called once up front to seed its heartbeat in Redis before returning -
+    real docker-compose has it already ticking continuously by the time
+    any request arrives, and the Allocator can't pick an instance that
+    hasn't heartbeated at all yet (see server/allocator_service.py's own
+    docstring)."""
     nats_client = FakeNatsClient()
     redis_client = fakeredis.FakeRedis()
     server = make_server(redis_client=redis_client, nats_client=nats_client)
     await server.start()
     shard = GameShard(nats_client, redis_client, config=settings,
-                       board_lines=board_lines or ["wK . .", ". . .", ". . ."])
-    await nats_client.subscribe("shard.inbox", cb=shard.handle_message)
+                       board_lines=board_lines or ["wK . .", ". . .", ". . ."], instance_id="shard-a")
+    await nats_client.subscribe("shard.inbox.shard-a", cb=shard.handle_message)
+    await shard.tick()
     matchmaker = MatchmakerService(nats_client, redis_client)
     await nats_client.subscribe("matchmaker.inbox", cb=matchmaker.handle_message)
+    allocator = AllocatorService(nats_client, redis_client)
+    await nats_client.subscribe("allocator.inbox", cb=allocator.handle_message)
     return server, shard, redis_client
 
 
@@ -338,6 +348,11 @@ def test_play_again_once_already_in_a_room_is_a_no_op():
 
 
 # -- ROOM CREATE / JOIN / MOVE: forwarding only -------------------------------
+# ROOM CREATE forwards to the Allocator (tests/test_allocator_service.py's
+# job from there); ROOM_JOIN/MOVE/JUMP/SELECT resolve room_owner:{room_id}
+# from Redis to find which Shard instance to forward to - a missing entry
+# is reported to the client as "Room not found" without ever reaching any
+# Shard (see server/ws_server.py's own docstring).
 
 
 def test_room_create_before_auth_is_rejected():
@@ -366,41 +381,74 @@ def test_room_join_before_auth_is_rejected():
     run(scenario())
 
 
-def test_room_create_forwards_a_command_envelope_with_no_room_id():
+def test_room_create_forwards_a_need_room_envelope_to_the_allocator():
     async def scenario():
         server = make_server()
         conn = FakeConnection()
         await authenticate(server, conn, "alice")
 
-        await server._forward_command(conn, "ROOM CREATE", room_id=None, verb_for_error="ROOM CREATE")
+        await server._handle_room_create(conn)
 
         subject, payload = server._nats.published[-1]
-        assert subject == "shard.inbox"
+        assert subject == "allocator.inbox"
         envelope = json.loads(payload)
         assert envelope == {
-            "kind": "command", "connection_id": server._connection_ids[conn],
-            "username": "alice", "rating": 1200, "room_id": None, "raw": "ROOM CREATE",
+            "players": [{
+                "connection_id": server._connection_ids[conn], "username": "alice", "rating": 1200,
+            }],
         }
 
     run(scenario())
 
 
-def test_move_forwards_a_command_envelope_with_the_known_room_id():
+def test_move_forwards_a_command_envelope_to_the_room_owning_shard():
     async def scenario():
         server = make_server()
         conn = FakeConnection(incoming=["MOVE a3 c3"])
         await authenticate(server, conn, "alice")
         server._connection_room[conn] = "abc123"
+        server._redis.set("room_owner:abc123", "shard-x")
         connection_id = server._connection_ids[conn]  # before handle_connection's own disconnect pops it
 
         await server.handle_connection(conn)
 
         subject, payload = server._nats.published[-2]  # last is the disconnect envelope, not this MOVE
+        assert subject == "shard.inbox.shard-x"
         envelope = json.loads(payload)
         assert envelope == {
             "kind": "command", "connection_id": connection_id,
             "username": "alice", "rating": 1200, "room_id": "abc123", "raw": "MOVE a3 c3",
         }
+
+    run(scenario())
+
+
+def test_move_to_a_room_with_no_known_owner_is_rejected():
+    async def scenario():
+        server = make_server()
+        conn = FakeConnection(incoming=["MOVE a3 c3"])
+        await authenticate(server, conn, "alice")
+        server._connection_room[conn] = "abc123"  # no room_owner:abc123 registered - lease expired or never was
+
+        await server.handle_connection(conn)
+
+        error = json.loads(conn.sent[-1])
+        assert error == {"type": "error", "payload": {"message": "Room 'abc123' not found"}}
+
+    run(scenario())
+
+
+def test_room_join_to_an_unregistered_room_is_rejected_without_reaching_any_shard():
+    async def scenario():
+        server = make_server()
+        conn = FakeConnection(incoming=["ROOM JOIN nonexistent"])
+        await authenticate(server, conn, "alice")
+
+        await server.handle_connection(conn)
+
+        error = json.loads(conn.sent[-1])
+        assert error == {"type": "error", "payload": {"message": "Room 'nonexistent' not found"}}
+        assert server._nats.published == []
 
     run(scenario())
 
@@ -465,14 +513,29 @@ def test_disconnecting_a_seated_connection_publishes_a_disconnect_envelope():
         await authenticate(server, conn, "alice")
         connection_id = server._connection_ids[conn]
         server._connection_room[conn] = "abc123"
+        server._redis.set("room_owner:abc123", "shard-x")
 
         await server.handle_connection(conn)
 
         subject, payload = server._nats.published[-1]
-        assert subject == "shard.inbox"
+        assert subject == "shard.inbox.shard-x"
         assert json.loads(payload) == {"kind": "disconnect", "connection_id": connection_id, "room_id": "abc123"}
         assert connection_id not in server._connections_by_id
         assert server._redis.get(f"connection:{connection_id}") is None
+
+    run(scenario())
+
+
+def test_disconnecting_with_no_known_room_owner_publishes_nothing():
+    async def scenario():
+        server = make_server()
+        conn = FakeConnection()  # empty incoming - handle_connection's loop ends right away
+        await authenticate(server, conn, "alice")
+        server._connection_room[conn] = "abc123"  # no room_owner:abc123 registered - lease expired or never was
+
+        await server.handle_connection(conn)
+
+        assert server._nats.published == []
 
     run(scenario())
 
@@ -682,8 +745,11 @@ def test_periodic_tick_broadcasts_state_without_a_new_command():
                            redis_client=redis_client, nats_client=nats_client),
         )
         shard = GameShard(nats_client, redis_client, config=settings,
-                           board_lines=["wR . .", ". . .", ". . ."])
-        await nats_client.subscribe("shard.inbox", cb=shard.handle_message)
+                           board_lines=["wR . .", ". . .", ". . ."], instance_id="shard-a")
+        await nats_client.subscribe("shard.inbox.shard-a", cb=shard.handle_message)
+        await shard.tick()  # seed the heartbeat before ROOM CREATE needs the Allocator to pick anything
+        allocator = AllocatorService(nats_client, redis_client)
+        await nats_client.subscribe("allocator.inbox", cb=allocator.handle_message)
         shard_tick_task = asyncio.create_task(_shard_tick_loop(shard))
         try:
             while "port" not in bound:

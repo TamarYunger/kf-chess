@@ -56,6 +56,15 @@ services:
       NATS_URL: "nats://nats:4222"
     depends_on: [redis, nats]
 
+  allocator:
+    build: .
+    command: ["python", "-m", "server.allocator_service"]
+    environment:
+      REDIS_HOST: "redis"
+      REDIS_PORT: "6379"
+      NATS_URL: "nats://nats:4222"
+    depends_on: [redis, nats]
+
   ws-server:
     build: .
     ports: ["8765:8765"]
@@ -64,7 +73,7 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       NATS_URL: "nats://nats:4222"
-    depends_on: [redis, nats, api-gateway, game-shard, matchmaker]
+    depends_on: [redis, nats, api-gateway, game-shard, matchmaker, allocator]
 
 volumes:
   postgres_data:

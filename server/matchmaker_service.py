@@ -31,6 +31,7 @@ import os
 import time
 
 from server.db import build_redis_client
+from server.health import start_health_server
 from server.logging_config import configure_server_logging
 from server.matchmaking import find_opponent
 from server.nats_connection import NatsConnectionProxy
@@ -39,6 +40,9 @@ from server.protocol import encode_no_match
 logger = logging.getLogger(__name__)
 
 INBOX_SUBJECT = "matchmaker.inbox"
+
+# Internal only, same reasoning as server/ws_server.py's own HEALTH_PORT.
+HEALTH_PORT = 9100
 
 # Same constant as server/ws_server.py's own ALLOCATOR_INBOX_SUBJECT -
 # duplicated deliberately rather than imported, so this service never
@@ -120,15 +124,23 @@ class MatchmakerService:
                 logger.info("%s's matchmaking search timed out", info["username"])
                 await self._proxy_for(connection_id).send(json.dumps(encode_no_match()))
 
+    def metrics(self):
+        """Fed to server/health.py's GET /metrics by run_forever - see
+        that module's own docstring for the format."""
+        return {"kf_chess_matchmaker_queue_depth": self._redis.hlen(QUEUE_KEY)}
 
-async def run_forever(nats_client, redis_client, on_ready=None):
-    """Runs the Matchmaker until cancelled. `on_ready(service)` mirrors
-    server/shard.py's own run_forever - mainly so tests can reach the
-    service instance without a module-level global."""
+
+async def run_forever(nats_client, redis_client, on_ready=None, health_port=HEALTH_PORT):
+    """Runs the Matchmaker until cancelled. `on_ready(service, health_runner)`
+    mirrors server/shard.py's own run_forever - mainly so tests can reach
+    the service instance without a module-level global. `health_port=0` is
+    how tests avoid colliding on the fixed default HEALTH_PORT across
+    separate test runs."""
     service = MatchmakerService(nats_client, redis_client)
     await nats_client.subscribe(INBOX_SUBJECT, cb=service.handle_message)
+    health_runner = await start_health_server("0.0.0.0", health_port, service.metrics)
     if on_ready is not None:
-        on_ready(service)
+        on_ready(service, health_runner)
     while True:
         await asyncio.sleep(TICK_INTERVAL_SECONDS)
         await service.resolve_timeouts()

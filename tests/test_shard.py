@@ -9,6 +9,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import aiohttp
 import fakeredis
 
 from config import settings
@@ -321,7 +322,8 @@ def test_run_forever_subscribes_to_this_instances_own_subject_and_ticks_until_ca
 
         task = asyncio.create_task(run_forever(
             nats_client, redis_client, config=settings, board_lines=["wK . .", ". . .", ". . ."],
-            on_ready=lambda shard: ready.setdefault("shard", shard), instance_id="instance-a",
+            on_ready=lambda shard, health_runner: ready.setdefault("shard", shard),
+            instance_id="instance-a", health_port=0,
         ))
         await asyncio.sleep(0.15)  # let it subscribe and tick at least once
         task.cancel()
@@ -333,5 +335,42 @@ def test_run_forever_subscribes_to_this_instances_own_subject_and_ticks_until_ca
             "players": [{"connection_id": "conn-1", "username": "alice", "rating": 1200}],
         }).encode("utf-8"))
         assert messages_for(nats_client, "conn-1")[0]["type"] == "room"
+
+    run(scenario())
+
+
+def test_metrics_reports_active_room_count():
+    shard, nats_client, redis_client = make_shard()
+    register(redis_client, "conn-1")
+
+    assert shard.metrics() == {"kf_chess_shard_active_rooms": 0}
+    run(create_room(shard, "room1", [{"connection_id": "conn-1", "username": "alice", "rating": 1200}]))
+
+    assert shard.metrics() == {"kf_chess_shard_active_rooms": 1}
+
+
+def test_run_forever_exposes_a_real_health_and_metrics_endpoint():
+    async def scenario():
+        nats_client = FakeNatsClient()
+        redis_client = fakeredis.FakeRedis()
+        ready = {}
+
+        task = asyncio.create_task(run_forever(
+            nats_client, redis_client, config=settings, board_lines=["wK . .", ". . .", ". . ."],
+            on_ready=lambda shard, health_runner: ready.update(shard=shard, health_runner=health_runner),
+            instance_id="instance-a", health_port=0,
+        ))
+        try:
+            while "health_runner" not in ready:
+                await asyncio.sleep(0.01)
+
+            port = ready["health_runner"].addresses[0][1]
+            async with aiohttp.ClientSession() as session:
+                health = await session.get(f"http://127.0.0.1:{port}/health")
+                assert health.status == 200
+                metrics = await session.get(f"http://127.0.0.1:{port}/metrics")
+                assert await metrics.text() == "kf_chess_shard_active_rooms 0\n"
+        finally:
+            task.cancel()
 
     run(scenario())

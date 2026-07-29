@@ -2,6 +2,11 @@ services:
   redis:
     image: redis:7-alpine
     ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   nats:
     image: nats:2-alpine
@@ -15,6 +20,11 @@ services:
       POSTGRES_DB: kfchess
     ports: ["5432:5432"]
     volumes: ["postgres_data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kfchess"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
   api-gateway:
     build: .
@@ -30,7 +40,17 @@ services:
       POSTGRES_PASSWORD: "kfchess"
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
-    depends_on: [redis, postgres]
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   game-shard:
     build: .
@@ -45,7 +65,19 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       NATS_URL: "nats://nats:4222"
-    depends_on: [redis, nats, postgres]
+    depends_on:
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   matchmaker:
     build: .
@@ -54,7 +86,17 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       NATS_URL: "nats://nats:4222"
-    depends_on: [redis, nats]
+    depends_on:
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   allocator:
     build: .
@@ -63,7 +105,17 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       NATS_URL: "nats://nats:4222"
-    depends_on: [redis, nats]
+    depends_on:
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
   ws-server:
     build: .
@@ -73,7 +125,25 @@ services:
       REDIS_HOST: "redis"
       REDIS_PORT: "6379"
       NATS_URL: "nats://nats:4222"
-    depends_on: [redis, nats, api-gateway, game-shard, matchmaker, allocator]
+    depends_on:
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      api-gateway:
+        condition: service_healthy
+      game-shard:
+        condition: service_healthy
+      matchmaker:
+        condition: service_healthy
+      allocator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9100/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
 volumes:
   postgres_data:

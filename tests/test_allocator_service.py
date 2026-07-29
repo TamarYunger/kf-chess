@@ -8,6 +8,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import aiohttp
 import fakeredis
 
 from server.allocator_service import (
@@ -154,7 +155,8 @@ def test_run_forever_subscribes_until_cancelled():
         ready = {}
 
         task = asyncio.create_task(run_forever(
-            nats_client, redis_client, on_ready=lambda service: ready.setdefault("service", service),
+            nats_client, redis_client,
+            on_ready=lambda service, health_runner: ready.setdefault("service", service), health_port=0,
         ))
         await asyncio.sleep(0.05)
         task.cancel()
@@ -163,5 +165,32 @@ def test_run_forever_subscribes_until_cancelled():
         await nats_client.publish(INBOX_SUBJECT, json.dumps({"players": [ALICE]}).encode("utf-8"))
         subject, payload = nats_client.published[-1]
         assert subject == "shard.inbox.shard-a"
+
+    run(scenario())
+
+
+def test_run_forever_exposes_a_real_health_endpoint():
+    async def scenario():
+        nats_client = FakeNatsClient()
+        redis_client = fakeredis.FakeRedis()
+        ready = {}
+
+        task = asyncio.create_task(run_forever(
+            nats_client, redis_client,
+            on_ready=lambda service, health_runner: ready.update(service=service, health_runner=health_runner),
+            health_port=0,
+        ))
+        try:
+            while "health_runner" not in ready:
+                await asyncio.sleep(0.01)
+
+            port = ready["health_runner"].addresses[0][1]
+            async with aiohttp.ClientSession() as session:
+                health = await session.get(f"http://127.0.0.1:{port}/health")
+                assert health.status == 200
+                metrics = await session.get(f"http://127.0.0.1:{port}/metrics")
+                assert await metrics.text() == ""  # no custom metrics for the Allocator - see run_forever
+        finally:
+            task.cancel()
 
     run(scenario())

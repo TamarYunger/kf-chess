@@ -38,11 +38,15 @@ import random
 import secrets
 
 from server.db import build_redis_client
+from server.health import start_health_server
 from server.logging_config import configure_server_logging
 
 logger = logging.getLogger(__name__)
 
 INBOX_SUBJECT = "allocator.inbox"
+
+# Internal only, same reasoning as server/ws_server.py's own HEALTH_PORT.
+HEALTH_PORT = 9100
 
 # Same constant as server/shard.py's own INBOX_SUBJECT_TEMPLATE - duplicated
 # deliberately rather than imported, so this service never pulls in
@@ -118,16 +122,21 @@ class AllocatorService:
         }).encode("utf-8"))
 
 
-async def run_forever(nats_client, redis_client, on_ready=None):
-    """Runs the Allocator until cancelled. `on_ready(service)` mirrors
-    server/shard.py's own run_forever - mainly so tests can reach the
-    service instance without a module-level global. No periodic work of
-    its own (unlike the Shard/Matchmaker's own tick loops) - it's purely
-    reactive to need_room requests, so this just has to stay alive."""
+async def run_forever(nats_client, redis_client, on_ready=None, health_port=HEALTH_PORT):
+    """Runs the Allocator until cancelled. `on_ready(service, health_runner)`
+    mirrors server/shard.py's own run_forever - mainly so tests can reach
+    the service instance without a module-level global. No periodic work
+    of its own (unlike the Shard/Matchmaker's own tick loops) - it's purely
+    reactive to need_room requests, so this just has to stay alive.
+    `health_port=0` is how tests avoid colliding on the fixed default
+    HEALTH_PORT across separate test runs. No custom metrics (see
+    server/health.py's own default) - this service is stateless/reactive,
+    with nothing per-instance worth gauging beyond bare liveness."""
     service = AllocatorService(nats_client, redis_client)
     await nats_client.subscribe(INBOX_SUBJECT, cb=service.handle_message)
+    health_runner = await start_health_server("0.0.0.0", health_port)
     if on_ready is not None:
-        on_ready(service)
+        on_ready(service, health_runner)
     await asyncio.Future()
 
 

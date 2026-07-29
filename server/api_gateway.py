@@ -50,6 +50,11 @@ def build_app(accounts=None, redis_client=None):
     ones in for actual deployment."""
     accounts = accounts if accounts is not None else AccountStore()
     redis_client = redis_client if redis_client is not None else _default_redis_client()
+    # In-process only (see handle_metrics) - a per-instance count of logins
+    # this one replica handled, not meant to survive a restart or be
+    # aggregated exactly; see server/health.py's own docstring for why
+    # that's an acceptable level of precision for a basic gauge.
+    login_count = {"value": 0}
 
     async def handle_login(request):
         try:
@@ -67,6 +72,7 @@ def build_app(accounts=None, redis_client=None):
         token = secrets.token_hex(24)
         identity = json.dumps({"username": username, "rating": rating})
         redis_client.setex(f"token:{token}", TOKEN_TTL_SECONDS, identity)
+        login_count["value"] += 1
         logger.info("%s logged in (rating=%s), token issued", username, rating)
         return web.json_response({"token": token, "username": username, "rating": rating})
 
@@ -76,10 +82,18 @@ def build_app(accounts=None, redis_client=None):
     async def handle_history(request):
         return web.json_response({"history": []})
 
+    async def handle_health(request):
+        return web.Response(text="ok")
+
+    async def handle_metrics(request):
+        return web.Response(text=f"kf_chess_api_gateway_logins_total {login_count['value']}\n")
+
     app = web.Application()
     app.router.add_post("/login", handle_login)
     app.router.add_get("/rooms", handle_rooms)
     app.router.add_get("/history", handle_history)
+    app.router.add_get("/health", handle_health)
+    app.router.add_get("/metrics", handle_metrics)
     return app
 
 

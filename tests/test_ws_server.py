@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 
+import aiohttp
 import fakeredis
 import websockets
 
@@ -552,6 +553,17 @@ def test_disconnecting_an_unauthenticated_connection_publishes_nothing():
     run(scenario())
 
 
+# -- Metrics -------------------------------------------------------------
+
+
+def test_metrics_reports_active_connection_count():
+    server = make_server()
+    server._clients.add(FakeConnection())
+    server._clients.add(FakeConnection())
+
+    assert server.metrics() == {"kf_chess_ws_active_connections": 2}
+
+
 # -- Full stack: GameServer + GameShard sharing one FakeNatsClient -----------
 
 
@@ -737,11 +749,11 @@ def test_periodic_tick_broadcasts_state_without_a_new_command():
         redis_client = fakeredis.FakeRedis()
         bound = {}
 
-        def on_ready(ws_server, game_server):
+        def on_ready(ws_server, game_server, health_runner):
             bound["port"] = ws_server.sockets[0].getsockname()[1]
 
         serve_task = asyncio.create_task(
-            serve_forever(host="127.0.0.1", port=0, on_ready=on_ready,
+            serve_forever(host="127.0.0.1", port=0, health_port=0, on_ready=on_ready,
                            redis_client=redis_client, nats_client=nats_client),
         )
         shard = GameShard(nats_client, redis_client, config=settings,
@@ -788,5 +800,41 @@ def test_periodic_tick_broadcasts_state_without_a_new_command():
         finally:
             serve_task.cancel()
             shard_tick_task.cancel()
+
+    asyncio.run(scenario())
+
+
+def test_serve_forever_exposes_a_real_health_and_metrics_endpoint():
+    # Proves the health server serve_forever starts is a genuinely separate
+    # real socket, not just a method that happens to exist - same
+    # "real round trip over mocking it away" convention as the rest of
+    # this file's real-socket tests.
+    async def scenario():
+        redis_client = fakeredis.FakeRedis()
+        nats_client = FakeNatsClient()
+        bound = {}
+
+        def on_ready(ws_server, game_server, health_runner):
+            bound["port"] = ws_server.sockets[0].getsockname()[1]
+            bound["health_port"] = health_runner.addresses[0][1]
+
+        serve_task = asyncio.create_task(
+            serve_forever(host="127.0.0.1", port=0, health_port=0, on_ready=on_ready,
+                           redis_client=redis_client, nats_client=nats_client),
+        )
+        try:
+            while "health_port" not in bound:
+                await asyncio.sleep(0.01)
+
+            async with aiohttp.ClientSession() as session:
+                health = await session.get(f"http://127.0.0.1:{bound['health_port']}/health")
+                assert health.status == 200
+
+                url = f"ws://127.0.0.1:{bound['port']}"
+                async with websockets.connect(url):
+                    metrics = await session.get(f"http://127.0.0.1:{bound['health_port']}/metrics")
+                    assert await metrics.text() == "kf_chess_ws_active_connections 1\n"
+        finally:
+            serve_task.cancel()
 
     asyncio.run(scenario())

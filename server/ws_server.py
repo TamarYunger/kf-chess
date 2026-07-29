@@ -44,6 +44,7 @@ import websockets
 
 from config import settings
 from server.db import build_redis_client
+from server.health import start_health_server
 from server.logging_config import configure_server_logging
 from server.protocol import ProtocolError, encode_error, encode_login, encode_login_rejected, parse_command
 from server.safe_send import safe_send
@@ -73,6 +74,11 @@ ALLOCATOR_INBOX_SUBJECT = "allocator.inbox"
 # unaffected (env var unset -> same "localhost" default as before).
 DEFAULT_HOST = os.environ.get("KF_CHESS_HOST", "localhost")
 DEFAULT_PORT = 8765
+
+# Internal only (see docker-compose.yml's healthcheck: for this service -
+# it curls this from inside the same container, never mapped to the host)
+# - see server/health.py's own docstring for what's served here.
+HEALTH_PORT = 9100
 
 
 def _default_redis_client():
@@ -351,23 +357,32 @@ class GameServer:
         # ending is what removes it from self._clients.
         await safe_send(connection, message)
 
+    def metrics(self):
+        """Fed to server/health.py's GET /metrics by serve_forever - see
+        that module's own docstring for the format."""
+        return {"kf_chess_ws_active_connections": len(self._clients)}
+
 
 async def serve_forever(host=DEFAULT_HOST, port=DEFAULT_PORT, on_ready=None, config=settings,
-                         redis_client=None, nats_client=None, instance_id=None):
-    """Runs the gateway until cancelled. `on_ready(bound_server, game_server)`
-    is called once the socket is actually listening - mainly so tests can
-    ask for an OS-assigned port (port=0) and learn what it became; not
-    otherwise needed to run the server for real. No periodic tick of its
-    own anymore (see GameServer's own docstring - matchmaking timeouts are
-    server/matchmaker_service.py's job now, and the Shard runs its own tick
-    for in-room real-time motion) - this just has to stay alive for as long
-    as `bound_server` does."""
+                         redis_client=None, nats_client=None, instance_id=None, health_port=HEALTH_PORT):
+    """Runs the gateway until cancelled. `on_ready(bound_server, game_server,
+    health_runner)` is called once both sockets are actually listening -
+    mainly so tests can ask for an OS-assigned port (port=0/health_port=0)
+    and learn what they became; not otherwise needed to run the server for
+    real. No periodic tick of its own anymore (see GameServer's own
+    docstring - matchmaking timeouts are server/matchmaker_service.py's
+    job now, and the Shard runs its own tick for in-room real-time motion)
+    - this just has to stay alive for as long as `bound_server` does.
+    `health_port=0` is how tests avoid colliding on the fixed default
+    HEALTH_PORT across separate test runs, same reason `port=0` already
+    exists for the main socket."""
     game_server = GameServer(config=config, redis_client=redis_client, nats_client=nats_client,
                               instance_id=instance_id)
     await game_server.start()
+    health_runner = await start_health_server(host, health_port, game_server.metrics)
     async with websockets.serve(game_server.handle_connection, host, port) as bound_server:
         if on_ready is not None:
-            on_ready(bound_server, game_server)
+            on_ready(bound_server, game_server, health_runner)
         await asyncio.Future()
 
 

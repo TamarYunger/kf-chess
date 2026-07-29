@@ -128,3 +128,43 @@ def test_history_stub_returns_an_empty_list():
             assert await response.json() == {"history": []}
 
     run(scenario())
+
+
+def test_health_returns_ok():
+    async def scenario():
+        client, _, _ = make_client_and_deps()
+        async with client:
+            response = await client.get("/health")
+            assert response.status == 200
+            assert await response.text() == "ok"
+
+    run(scenario())
+
+
+def test_metrics_counts_logins_handled_by_this_instance():
+    async def scenario():
+        client, _, _ = make_client_and_deps()
+        async with client:
+            before = await (await client.get("/metrics")).text()
+            assert before == "kf_chess_api_gateway_logins_total 0\n"
+
+            await client.post("/login", json={"username": "alice", "password": "pw"})
+            await client.post("/login", json={"username": "bob", "password": "pw"})
+
+            after = await (await client.get("/metrics")).text()
+            assert after == "kf_chess_api_gateway_logins_total 2\n"
+
+    run(scenario())
+
+
+def test_metrics_does_not_count_a_failed_login():
+    async def scenario():
+        client, accounts, _ = make_client_and_deps()
+        accounts.authenticate("alice", "correct-password")
+        async with client:
+            await client.post("/login", json={"username": "alice", "password": "wrong-password"})
+
+            after = await (await client.get("/metrics")).text()
+            assert after == "kf_chess_api_gateway_logins_total 0\n"
+
+    run(scenario())

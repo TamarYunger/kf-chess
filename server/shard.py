@@ -63,6 +63,7 @@ from rules.game_conditions import KingCaptureWinCondition, LastRankPromotion
 from rules.rule_engine import RuleEngine
 from rules.rule_registry import build_default_registry
 from server.db import AccountStore, PostgresAccountStore, build_redis_client
+from server.health import start_health_server
 from server.logging_config import configure_server_logging
 from server.nats_connection import NatsConnectionProxy
 from server.protocol import ProtocolError, encode_error, parse_command
@@ -74,6 +75,12 @@ logger = logging.getLogger(__name__)
 # matchmaker_service.py's or server/allocator_service.py's own INBOX_SUBJECT
 # - see this module's own docstring for why.
 INBOX_SUBJECT_TEMPLATE = "shard.inbox.{instance_id}"
+
+# Internal only, same reasoning as server/ws_server.py's own HEALTH_PORT -
+# curled from inside this container by docker-compose.yml's healthcheck:,
+# never mapped to the host (each game-shard replica binds this same
+# number inside its own isolated container, no collision).
+HEALTH_PORT = 9100
 
 # Same cadence as ws_server.py's own TICK_INTERVAL_SECONDS - real-time
 # motion (a move landing, a rest cooldown expiring) has to reach clients
@@ -151,6 +158,11 @@ class GameShard:
         room = Room(room_id, engine, self._colors, self._accounts)
         self._rooms[room_id] = room
         return room
+
+    def metrics(self):
+        """Fed to server/health.py's GET /metrics by run_forever - see
+        that module's own docstring for the format."""
+        return {"kf_chess_shard_active_rooms": len(self._rooms)}
 
     async def tick(self):
         """Advances every Room's real-time clock, then reports this
@@ -247,19 +259,22 @@ class GameShard:
 
 
 async def run_forever(nats_client, redis_client, config=settings, accounts=None, board_lines=None, on_ready=None,
-                       instance_id=None):
-    """Runs the shard until cancelled. `on_ready(shard)` is called once the
-    NATS subscription is actually active - mirrors server/ws_server.py's
-    serve_forever's own on_ready, mainly so tests can reach the shard
-    instance without a module-level global. `instance_id` is resolved once
-    here (rather than read back off `shard._instance_id`) since it's also
-    needed to build the subscription subject itself."""
+                       instance_id=None, health_port=HEALTH_PORT):
+    """Runs the shard until cancelled. `on_ready(shard, health_runner)` is
+    called once the NATS subscription is actually active - mirrors
+    server/ws_server.py's serve_forever's own on_ready, mainly so tests can
+    reach the shard instance without a module-level global. `instance_id`
+    is resolved once here (rather than read back off `shard._instance_id`)
+    since it's also needed to build the subscription subject itself.
+    `health_port=0` is how tests avoid colliding on the fixed default
+    HEALTH_PORT across separate test runs."""
     instance_id = instance_id or socket.gethostname()
     shard = GameShard(nats_client, redis_client, config=config, accounts=accounts, board_lines=board_lines,
                        instance_id=instance_id)
     await nats_client.subscribe(INBOX_SUBJECT_TEMPLATE.format(instance_id=instance_id), cb=shard.handle_message)
+    health_runner = await start_health_server("0.0.0.0", health_port, shard.metrics)
     if on_ready is not None:
-        on_ready(shard)
+        on_ready(shard, health_runner)
     while True:
         await asyncio.sleep(TICK_INTERVAL_SECONDS)
         await shard.tick()

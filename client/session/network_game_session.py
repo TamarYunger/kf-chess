@@ -57,7 +57,6 @@ class NetworkGameSession(GameSession):
         self._pending_start: tuple[int, int] | None = None  # a cell selected by a first click, awaiting a second
         self._legal_destinations: frozenset = frozenset()  # reply to that click's own SELECT, once it arrives
         self._rejection_reason: str | None = None
-        self._latest_snapshot: GameSnapshot | None = None
         self._client.start()
 
     def submit_command(self, command: dict | str) -> None:
@@ -125,14 +124,6 @@ class NetworkGameSession(GameSession):
             elif message["type"] == LEGAL_DESTINATIONS:
                 self._apply_legal_destinations(message["payload"])
 
-        if self._snapshot is None:
-            self._latest_snapshot = None
-        else:
-            self._latest_snapshot = dataclasses.replace(
-                self._snapshot, selected=self._pending_start, rejection_reason=self._rejection_reason,
-                legal_destinations=self._legal_destinations,
-            )
-
     def _apply_legal_destinations(self, payload: dict) -> None:
         # A reply to a SELECT that's since been superseded (a second click
         # already sent the MOVE, or a new SELECT for a different cell is
@@ -143,7 +134,17 @@ class NetworkGameSession(GameSession):
         self._legal_destinations = frozenset(tuple(cell) for cell in payload["destinations"])
 
     def latest_snapshot(self) -> GameSnapshot | None:
-        return self._latest_snapshot
+        # Computed on demand rather than cached on tick() - nothing here is
+        # side-effecting (unlike LocalGameSession's equivalent, which has to
+        # call engine.legal_destinations()), so there's no reason to keep a
+        # field in sync with self._snapshot/_pending_start/_rejection_reason/
+        # _legal_destinations instead of just deriving it from them here.
+        if self._snapshot is None:
+            return None
+        return dataclasses.replace(
+            self._snapshot, selected=self._pending_start, rejection_reason=self._rejection_reason,
+            legal_destinations=self._legal_destinations,
+        )
 
     def close(self) -> None:
         self._client.stop()

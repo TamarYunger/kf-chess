@@ -33,6 +33,7 @@ from typing import Callable
 
 from server.db import build_redis_client, decode_redis_value
 from server.health import start_health_server
+from server.inbox import handle_inbox_message
 from server.logging_config import configure_server_logging
 from server.matchmaking import find_opponent
 from server.nats_connection import NatsConnectionProxy
@@ -80,17 +81,18 @@ class MatchmakerService:
         per PLAY request or per queue-departure notice (see _handle_leave).
         Fire-and-forget delivery, same reasoning as server/shard.py's own
         handle_message: a bad envelope must not crash the whole Matchmaker
-        over one bad message. Envelopes with no "kind" are treated as "play"
-        - the shape server/ws_server.py's _handle_play always sent before
-        "leave" existed."""
-        try:
-            envelope = json.loads(msg.data)
-            if envelope.get("kind", "play") == "leave":
-                await self._handle_leave(envelope)
-            else:
-                await self._handle_play(envelope)
-        except Exception:
-            logger.exception("failed to handle matchmaker inbox message")
+        over one bad message - see server/inbox.py's shared
+        handle_inbox_message for that try/parse/dispatch/except shape."""
+        await handle_inbox_message(msg, self._dispatch, "matchmaker inbox message", logger)
+
+    async def _dispatch(self, envelope: dict) -> None:
+        # Envelopes with no "kind" are treated as "play" - the shape
+        # server/ws_server.py's _handle_play always sent before "leave"
+        # existed.
+        if envelope.get("kind", "play") == "leave":
+            await self._handle_leave(envelope)
+        else:
+            await self._handle_play(envelope)
 
     async def _handle_play(self, envelope: dict) -> None:
         connection_id = envelope["connection_id"]

@@ -62,6 +62,7 @@ from config import settings
 from game.engine_factory import build_engine
 from server.db import AccountStore, PostgresAccountStore, build_redis_client
 from server.health import start_health_server
+from server.inbox import handle_inbox_message
 from server.logging_config import configure_server_logging
 from server.nats_connection import NatsConnectionProxy
 from server.protocol import Command, ProtocolError, encode_error, parse_command
@@ -182,18 +183,18 @@ class GameShard:
         the module docstring - not NATS request/reply), so there's no
         caller waiting on this to propagate an exception to; a malformed
         envelope or a bug here must not crash the whole shard process over
-        one bad message."""
-        try:
-            envelope = json.loads(msg.data)
-            kind = envelope.get("kind")
-            if kind == "create_room":
-                await self._handle_create_room(envelope["room_id"], envelope["players"])
-            elif kind == "disconnect":
-                await self._handle_disconnect(envelope)
-            else:
-                await self._handle_command(envelope)
-        except Exception:
-            logger.exception("failed to handle shard inbox message")
+        one bad message - see server/inbox.py's shared handle_inbox_message
+        for that try/parse/dispatch/except shape."""
+        await handle_inbox_message(msg, self._dispatch, "shard inbox message", logger)
+
+    async def _dispatch(self, envelope: dict) -> None:
+        kind = envelope.get("kind")
+        if kind == "create_room":
+            await self._handle_create_room(envelope["room_id"], envelope["players"])
+        elif kind == "disconnect":
+            await self._handle_disconnect(envelope)
+        else:
+            await self._handle_command(envelope)
 
     async def _handle_create_room(self, room_id: str, players: list[dict]) -> None:
         # server/allocator_service.py has already picked this instance and

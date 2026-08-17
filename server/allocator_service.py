@@ -40,6 +40,7 @@ from typing import Callable
 
 from server.db import build_redis_client, decode_redis_value
 from server.health import start_health_server
+from server.inbox import handle_inbox_message
 from server.logging_config import configure_server_logging
 from server.nats_connection import NatsConnectionProxy
 from server.protocol import encode_error
@@ -94,12 +95,13 @@ class AllocatorService:
         """The NATS subscription callback for INBOX_SUBJECT - one envelope
         per need_room request. Fire-and-forget delivery, same reasoning as
         server/shard.py's own handle_message: a bad envelope must not
-        crash the whole Allocator over one bad message."""
-        try:
-            envelope = json.loads(msg.data)
-            await self._handle_need_room(envelope["players"])
-        except Exception:
-            logger.exception("failed to handle allocator inbox message")
+        crash the whole Allocator over one bad message - see server/
+        inbox.py's shared handle_inbox_message for that try/parse/
+        dispatch/except shape."""
+        await handle_inbox_message(msg, self._dispatch, "allocator inbox message", logger)
+
+    async def _dispatch(self, envelope: dict) -> None:
+        await self._handle_need_room(envelope["players"])
 
     async def _handle_need_room(self, players: list[dict]) -> None:
         instance_id = self._pick_shard_instance()

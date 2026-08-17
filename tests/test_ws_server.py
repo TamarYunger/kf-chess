@@ -508,6 +508,18 @@ def test_outbox_message_for_an_already_disconnected_connection_is_harmless():
     run(scenario())
 
 
+def test_a_malformed_outbox_message_is_logged_not_raised():
+    async def scenario():
+        server = make_server()
+
+        # Missing every expected key - must be swallowed, not crash this
+        # instance's whole outbox subscription over one bad message, same
+        # as every other NATS inbox/outbox handler in this codebase.
+        await server._handle_outbox_message(_FakeMsg("outbox.instance-a", b"{}"))
+
+    run(scenario())
+
+
 # -- Disconnect: notifying the Shard ------------------------------------------
 
 

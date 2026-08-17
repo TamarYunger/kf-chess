@@ -362,16 +362,25 @@ class GameServer:
         to the real socket, and - the one bit of local bookkeeping this
         class still needs - remembers the room_id from a "room" message,
         so a later MOVE/JUMP/SELECT from the same connection knows where
-        to route to (see _handle_message)."""
-        envelope = json.loads(msg.data)
-        connection = self._connections_by_id.get(envelope["connection_id"])
-        if connection is None:
-            return  # this connection already disconnected from this instance
-        message = envelope["message"]
-        await self._safe_send(connection, message)
-        decoded = json.loads(message)
-        if decoded.get("type") == "room":
-            self._connection_room[connection] = decoded["payload"]["room_id"]
+        to route to (see _handle_message).
+
+        Wrapped like every other NATS inbox/outbox callback in this
+        codebase (server/shard.py's handle_message, server/
+        matchmaker_service.py's, server/allocator_service.py's): a
+        malformed envelope must not crash this instance's whole outbox
+        subscription over one bad message."""
+        try:
+            envelope = json.loads(msg.data)
+            connection = self._connections_by_id.get(envelope["connection_id"])
+            if connection is None:
+                return  # this connection already disconnected from this instance
+            message = envelope["message"]
+            await self._safe_send(connection, message)
+            decoded = json.loads(message)
+            if decoded.get("type") == "room":
+                self._connection_room[connection] = decoded["payload"]["room_id"]
+        except Exception:
+            logger.exception("failed to handle outbox message")
 
     async def _safe_send(self, connection: Connection, message: str) -> None:
         # A client can disconnect between being read from self._clients and

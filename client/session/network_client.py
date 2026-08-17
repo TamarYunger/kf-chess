@@ -9,6 +9,7 @@ import websockets
 import websockets.exceptions
 
 from bus.event_types import CONNECTED, CONNECTION_ERROR, DISCONNECTED
+from client.session.queue_utils import drain_queue
 
 DEFAULT_RECONNECT_DELAY_SECONDS = 2.0
 
@@ -98,13 +99,7 @@ class NetworkClient:
     def drain(self) -> list[dict]:
         """Pops every message currently queued, without blocking - for the
         render loop to call once per frame."""
-        messages = []
-        while True:
-            try:
-                messages.append(self.incoming.get_nowait())
-            except queue.Empty:
-                break
-        return messages
+        return drain_queue(self.incoming)
 
     # -- background thread -------------------------------------------------
 

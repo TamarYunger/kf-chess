@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 
 from bus.event_types import LOGIN_REJECTED
+from client.session.queue_utils import drain_queue
 
 AUTH_TOKEN_RECEIVED = "auth_token_received"
 
@@ -48,10 +49,4 @@ class LoginClient:
         """Pops every message currently queued, without blocking - for
         NetworkGameSession.tick() to call once per frame, same contract as
         NetworkClient.drain()."""
-        messages = []
-        while True:
-            try:
-                messages.append(self.incoming.get_nowait())
-            except queue.Empty:
-                break
-        return messages
+        return drain_queue(self.incoming)

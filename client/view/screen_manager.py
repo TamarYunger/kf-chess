@@ -57,6 +57,14 @@ class ScreenManager:
         self._screens[name] = screen
         for event_type, target in (transitions or {}).items():
             self._events.subscribe(event_type, self._transition_handler(target))
+        if name == self._current:
+            # go_to() is what normally calls on_enter() when a screen
+            # becomes current - but the *initial* screen never goes through
+            # go_to() at all (it's current from __init__, before it's even
+            # registered), so without this its own setup (LoginScreen
+            # focusing its username field, clearing stale state) would
+            # silently never run on startup.
+            screen.on_enter()
 
     def _transition_handler(self, target: str):
         def handler(payload: object) -> None:

@@ -67,7 +67,7 @@ def test_go_to_calls_exit_on_the_old_screen_and_enter_on_the_new_one():
 
     assert a.exited == 1
     assert b.entered == 1
-    assert a.entered == 0  # never re-entered
+    assert a.entered == 1  # only from being the initial screen - never re-entered
     assert b.exited == 0
 
 
@@ -78,8 +78,23 @@ def test_go_to_the_same_screen_is_a_no_op():
 
     manager.go_to("A")
 
-    assert a.entered == 0
+    assert a.entered == 1  # only from being the initial screen - go_to("A") itself is a no-op
     assert a.exited == 0
+
+
+def test_the_initial_screen_is_entered_as_soon_as_it_is_registered():
+    # Regression: the initial screen never went through go_to() (it's
+    # already current from __init__, before it's even registered), so its
+    # own on_enter() used to never run at all - e.g. LoginScreen's own
+    # setup (focus the username field, clear stale state) silently skipped
+    # on startup.
+    manager, events, a, b = make_manager()
+
+    manager.register("A", a)
+
+    assert a.entered == 1
+    manager.register("B", b)
+    assert b.entered == 0  # not the initial screen - only go_to() enters it
 
 
 def test_render_and_input_delegate_to_the_current_screen_only():

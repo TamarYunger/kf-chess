@@ -26,6 +26,10 @@ def test_build_screens_starts_on_login():
         manager = build_screens(events, settings, session)
         assert manager.current_name == "LOGIN"
         assert isinstance(manager.current, LoginScreen)
+        # Regression: the initial screen used to never get its own
+        # on_enter() called, so the username field wasn't focused yet at
+        # startup - see client/view/screen_manager.py's register().
+        assert manager.current._username_field.focused is True
     finally:
         session.close()
 

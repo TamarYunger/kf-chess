@@ -192,7 +192,7 @@ class GameServer:
             connection_id = self._connection_ids.pop(connection, None)
             if connection_id is not None:
                 self._connections_by_id.pop(connection_id, None)
-                self._redis.delete(f"connection:{connection_id}")
+                await asyncio.to_thread(self._redis.delete, f"connection:{connection_id}")
                 # Unconditional, not just when room_id is set: a connection
                 # that dropped while still waiting in the Matchmaker's queue
                 # (PLAY sent, no room yet) has no room_id here at all, but
@@ -253,15 +253,19 @@ class GameServer:
             await self._safe_send(connection, json.dumps(encode_login(player["username"], player["rating"])))
             return
 
+        # self._redis is the plain synchronous redis.Redis client - run
+        # each round-trip in a worker thread so it doesn't block this whole
+        # instance's event loop (every other connection it's holding) for
+        # as long as Redis takes to answer.
         key = f"token:{token}"
-        raw_identity = self._redis.get(key)
+        raw_identity = await asyncio.to_thread(self._redis.get, key)
         if raw_identity is None:
             logger.warning("AUTH rejected: invalid or expired token")
             await self._safe_send(connection, json.dumps(encode_login_rejected("Invalid or expired token")))
             return
         # One-time use: a token that's already been redeemed (or replayed
         # by an eavesdropper) doesn't authenticate a second connection.
-        self._redis.delete(key)
+        await asyncio.to_thread(self._redis.delete, key)
 
         identity = json.loads(raw_identity)
         username, rating = identity["username"], identity["rating"]
@@ -270,7 +274,7 @@ class GameServer:
         connection_id = secrets.token_hex(8)
         self._connection_ids[connection] = connection_id
         self._connections_by_id[connection_id] = connection
-        self._redis.set(f"connection:{connection_id}", self._instance_id)
+        await asyncio.to_thread(self._redis.set, f"connection:{connection_id}", self._instance_id)
 
         logger.info("%s authenticated (rating=%s)", username, rating)
         await self._safe_send(connection, json.dumps(encode_login(username, rating)))
@@ -342,7 +346,7 @@ class GameServer:
         about (_forward_command does; the disconnect notification in
         handle_connection doesn't need to, the connection's closing
         regardless)."""
-        instance_id = self._redis.get(f"room_owner:{room_id}")
+        instance_id = await asyncio.to_thread(self._redis.get, f"room_owner:{room_id}")
         if instance_id is None:
             return None
         if isinstance(instance_id, bytes):

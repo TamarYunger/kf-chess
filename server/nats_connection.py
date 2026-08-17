@@ -17,6 +17,7 @@ once - this is the scale-appropriate version chosen up front instead.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 
@@ -27,7 +28,12 @@ class NatsConnectionProxy:
         self.connection_id = connection_id
 
     async def send(self, message: str) -> None:
-        instance_id = self._redis.get(f"connection:{self.connection_id}")
+        # self._redis is the plain synchronous redis.Redis client - a real
+        # network round-trip here would otherwise block this whole process's
+        # event loop (every other connection/room it's holding) for as long
+        # as Redis takes to answer. Running it in a worker thread keeps this
+        # one send() waiting without stalling anything else on the loop.
+        instance_id = await asyncio.to_thread(self._redis.get, f"connection:{self.connection_id}")
         if instance_id is None:
             return  # the owning Gateway instance is gone - nothing to deliver to
         if isinstance(instance_id, bytes):

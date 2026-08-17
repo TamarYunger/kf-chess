@@ -181,9 +181,17 @@ class GameShard:
         now = time.monotonic()
         for room in list(self._rooms.values()):
             await room.tick(now)
-        self._redis.setex(f"shard:heartbeat:{self._instance_id}", PRESENCE_TTL_SECONDS, len(self._rooms))
+        # self._redis is the plain synchronous redis.Redis client - run each
+        # round-trip in a worker thread so it doesn't block this whole
+        # Shard's event loop (every room/connection it's holding) while
+        # Redis answers.
+        await asyncio.to_thread(
+            self._redis.setex, f"shard:heartbeat:{self._instance_id}", PRESENCE_TTL_SECONDS, len(self._rooms),
+        )
         for room_id in self._rooms:
-            self._redis.setex(f"room_owner:{room_id}", PRESENCE_TTL_SECONDS, self._instance_id)
+            await asyncio.to_thread(
+                self._redis.setex, f"room_owner:{room_id}", PRESENCE_TTL_SECONDS, self._instance_id,
+            )
 
     async def handle_message(self, msg: object) -> None:
         """The NATS subscription callback for this instance's own inbox

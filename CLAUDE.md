@@ -26,9 +26,14 @@ a "mode flag" on the other; each is its own independent script.
   `game/snapshot.py`. Pure state + domain rules, no orchestration, no I/O.
 - **Application** — `game/engine.py` (`GameEngine`, self-described as
   "Application-service coordinator"), `game/controller.py`,
-  `game/move_history.py`, `server/` (the multiplayer lobby/room layer),
-  `client/session/` (the `GameSession` bridge between Application and
-  Presentation).
+  `game/move_history.py`, `server/` (now a small distributed system, not
+  one process — WS Gateway `ws_server.py` holds real sockets and forwards
+  over NATS to whichever Game Shard `shard.py` hosts a `Room`; Matchmaker
+  `matchmaker_service.py` and Allocator `allocator_service.py` decide who
+  plays whom and which Shard a new room lands on; REST `api_gateway.py`
+  handles login; all share Redis/Postgres — see Server_Design.md for the
+  full topology), `client/session/` (the `GameSession` bridge between
+  Application and Presentation).
 - **Presentation** — `client/view/` (rendering, screens, input). Never
   imports `game`/`rules`/`realtime` directly — only talks to `GameSession`
   and `GameSnapshot`.
@@ -41,10 +46,12 @@ a "mode flag" on the other; each is its own independent script.
 
 - **100% line coverage is the current baseline** (`.coveragerc` excludes
   only genuinely untestable OS-boundary lines via `# pragma: no cover`:
-  `if __name__ == "__main__":` blocks, `client/view/img.py`'s real cv2
-  window calls, `client/view/app_loop.py`'s `run_app`,
-  `client/view/sound.py`'s `_play`). Keep it there — write a real test
-  before reaching for pragma.
+  `if __name__ == "__main__":` blocks and every service's own `main()`
+  (`server/ws_server.py`, `server/shard.py`, `server/matchmaker_service.py`,
+  `server/api_gateway.py`, `server/allocator_service.py` — real
+  NATS/Redis/Postgres connections), `client/view/img.py`'s real cv2 window
+  calls, `client/view/app_loop.py`'s `run_app`, `client/view/sound.py`'s
+  `_play`). Keep it there — write a real test before reaching for pragma.
 - **Never wire real sound (`client/view/sound.py`'s `attach_sound`) inside
   `LocalGameSession`/`NetworkGameSession` themselves** — several tests
   drive a real move to landing or a real game-over on purpose, and that

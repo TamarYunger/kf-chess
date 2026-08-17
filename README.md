@@ -49,12 +49,34 @@ game/      models.py              - MoveResult + Reason (engine command-boundary
            presentation_stub.py   - placeholder sound/animation subscriber (text mode has none)
            engine.py              - GameEngine (application-service coordinator)
            snapshot.py            - GameSnapshot (read-only view model, owned by the engine)
-server/    ws_server.py           - GameServer: the lobby (LOGIN/PLAY/ROOM), routes to rooms
-           room.py                - Room: one game's seats, GameEngine, disconnect grace period
-           protocol.py            - wire format: text commands in, JSON snapshots/events out
-           matchmaking.py         - PLAY's rating-range opponent search
-           db.py                  - AccountStore (SQLite: username/password/rating)
+server/    a small distributed system (see Server_Design.md for the full topology),
+           not one process - a Room/GameEngine and the real socket that reaches
+           it live in two different services, talking over NATS:
+           ws_server.py           - WS Gateway: holds every live socket, forwards
+                                     AUTH/PLAY/ROOM/MOVE/JUMP/SELECT to whichever
+                                     Shard owns the room
+           api_gateway.py         - REST front door: POST /login issues a
+                                     short-lived token for AUTH to redeem
+           shard.py               - Game Shard: hosts Room/GameEngine instances,
+                                     the sole source of truth for game rules
+           room.py                - Room: one game's seats, GameEngine, disconnect
+                                     grace period
+           matchmaker_service.py  - Matchmaker: PLAY's rating-range opponent
+                                     search over a Redis-backed waiting queue
+           allocator_service.py   - Allocator: picks which Shard replica a new
+                                     room lands on (power-of-two-choices)
+           matchmaking.py         - find_opponent: the pure rating-range search
+                                     the Matchmaker calls
+           nats_connection.py     - NatsConnectionProxy: looks like a live
+                                     connection to Room, routes over NATS instead
+           inbox.py               - shared NATS inbox parse/dispatch/except shape
+           protocol.py            - wire format: text commands in, JSON
+                                     snapshots/events out
+           db.py                  - AccountStore/PostgresAccountStore
+                                     (username/password/rating) + Redis/DSN wiring
            elo.py                 - rating update on game_over
+           health.py              - GET /health and GET /metrics for each service
+           safe_send.py           - swallows a send() to an already-closed connection
            logging_config.py      - server-side log file setup
 client/    everything that only ever runs on the player's machine
   session/   game_session.py        - GameSession: the abstract session interface the UI talks to
@@ -92,10 +114,18 @@ layer without touching the others:
   moves/jumps, arrival timing, capture and interception; reports `ArrivalEvent`s.
 - **GameEngine** (`game/engine.py`) - application-service coordinator and public
   command boundary; owns the game-over guard and one-motion-at-a-time policy.
-- **Server** (`server/`) - the multiplayer lobby: authentication, matchmaking,
-  rooms with seats/viewers, disconnect grace periods, Elo, all built on the
-  exact same `GameEngine` the offline path uses - the server never has its
-  own game logic, only one `Room` per match.
+- **Server** (`server/`) - a small distributed system, not one process: the
+  WS Gateway (`ws_server.py`) holds every real socket and forwards commands
+  over NATS to whichever Game Shard (`shard.py`) hosts that room; the
+  Matchmaker (`matchmaker_service.py`) and Allocator (`allocator_service.py`)
+  decide who plays whom and which Shard replica a new room lands on; the
+  REST API Gateway (`api_gateway.py`) handles login. All of them share Redis
+  (presence/routing/session state) and Postgres (accounts) - see
+  `Server_Design.md` for the full topology. Authentication, matchmaking,
+  rooms with seats/viewers, disconnect grace periods, and Elo are all built
+  on the exact same `GameEngine` the offline path uses - the server never
+  has its own game logic, only one `Room` per match, owned by whichever
+  Shard replica currently hosts it.
 - **Session** (`client/session/`) - `GameSession` is the one interface every
   screen talks to instead of `GameEngine` or a network client directly, so
   the same UI works identically offline (`LocalGameSession`) or online
@@ -125,13 +155,20 @@ python main.py < some_script.txt
 python main_gui.py
 ```
 
-**Online**: start the server, then one `main_online.py` per player -
+**Online**: the server is a small distributed system (WS Gateway, REST API
+Gateway, Game Shard, Matchmaker, Allocator, backed by Postgres/Redis/NATS -
+see `Server_Design.md` for the full topology). Easiest way to run it all
+locally:
 ```
-python -m server.ws_server
+docker compose up
+```
+then one `main_online.py` per player:
+```
 python main_online.py
 ```
-`main_online.py` connects to `ws://localhost:8765` by default (see
-`main_online.py`'s `DEFAULT_SERVER_URL`).
+`main_online.py` connects to `ws://localhost:8765` (the WS Gateway) and
+`http://localhost:8080` (the REST API Gateway) by default (see
+`main_online.py`'s `DEFAULT_SERVER_URL`/`DEFAULT_API_GATEWAY_URL`).
 
 ## How the 4 requirements are addressed
 
@@ -160,7 +197,7 @@ python main_online.py
    `config/settings.py`); the board's internal list-of-lists storage is
    private and only reachable through its public interface.
 
-4. **Tests & DI** - `tests/` covers every module (95%+ line coverage).
+4. **Tests & DI** - `tests/` covers every module (100% line coverage).
    `GameEngine`, `Room`, and every `GameSession` take all collaborators
    (board, registry, win condition, promotion rule, config, event bus) as
    constructor/function arguments, so tests substitute fakes (see

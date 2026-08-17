@@ -137,63 +137,81 @@ class PostgresAccountStore:
         self._conn.commit()
 
     def authenticate(self, username: str, password: str) -> tuple[bool, int | None, str | None]:
-        with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT password_hash, salt, rating FROM users WHERE username = %s", (username,),
-            )
-            row = cur.fetchone()
-            if row is not None:
-                stored_hash, salt, rating = row
-                # Read-only so far, but psycopg2's default non-autocommit
-                # mode still leaves this connection "idle in transaction"
-                # until something closes it - and this connection is
-                # long-lived (one per process, see server/api_gateway.py's
-                # main()), so every login for an existing user would
-                # otherwise leave it open indefinitely between requests.
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT password_hash, salt, rating FROM users WHERE username = %s", (username,),
+                )
+                row = cur.fetchone()
+                if row is not None:
+                    stored_hash, salt, rating = row
+                    # Read-only so far, but psycopg2's default non-autocommit
+                    # mode still leaves this connection "idle in transaction"
+                    # until something closes it - and this connection is
+                    # long-lived (one per process, see server/api_gateway.py's
+                    # main()), so every login for an existing user would
+                    # otherwise leave it open indefinitely between requests.
+                    self._conn.commit()
+                    if _hash_password(password, salt) != stored_hash:
+                        return False, None, "Invalid password"
+                    return True, rating, None
+
+                # Nobody has this username yet, as far as we saw - but another
+                # shard could be creating it from a concurrent first login at
+                # the same moment. ON CONFLICT DO NOTHING makes the INSERT a
+                # no-op if we lost that race, instead of raising/crashing.
+                salt = secrets.token_hex(16)
+                password_hash = _hash_password(password, salt)
+                cur.execute(
+                    "INSERT INTO users (username, password_hash, salt, rating) "
+                    "VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING",
+                    (username, password_hash, salt, DEFAULT_RATING),
+                )
                 self._conn.commit()
-                if _hash_password(password, salt) != stored_hash:
+
+                cur.execute(
+                    "SELECT password_hash, salt, rating FROM users WHERE username = %s", (username,),
+                )
+                stored_hash, stored_salt, rating = cur.fetchone()
+                self._conn.commit()  # read-only from here - see the existing-user branch's own comment
+                if stored_hash == password_hash:
+                    return True, DEFAULT_RATING, None  # our own insert won the race
+
+                # Someone else's login created this username first - check our
+                # password against what they actually stored, not what we
+                # attempted to insert.
+                if _hash_password(password, stored_salt) != stored_hash:
                     return False, None, "Invalid password"
                 return True, rating, None
-
-            # Nobody has this username yet, as far as we saw - but another
-            # shard could be creating it from a concurrent first login at
-            # the same moment. ON CONFLICT DO NOTHING makes the INSERT a
-            # no-op if we lost that race, instead of raising/crashing.
-            salt = secrets.token_hex(16)
-            password_hash = _hash_password(password, salt)
-            cur.execute(
-                "INSERT INTO users (username, password_hash, salt, rating) "
-                "VALUES (%s, %s, %s, %s) ON CONFLICT (username) DO NOTHING",
-                (username, password_hash, salt, DEFAULT_RATING),
-            )
-            self._conn.commit()
-
-            cur.execute(
-                "SELECT password_hash, salt, rating FROM users WHERE username = %s", (username,),
-            )
-            stored_hash, stored_salt, rating = cur.fetchone()
-            self._conn.commit()  # read-only from here - see the existing-user branch's own comment
-            if stored_hash == password_hash:
-                return True, DEFAULT_RATING, None  # our own insert won the race
-
-            # Someone else's login created this username first - check our
-            # password against what they actually stored, not what we
-            # attempted to insert.
-            if _hash_password(password, stored_salt) != stored_hash:
-                return False, None, "Invalid password"
-            return True, rating, None
+        except Exception:
+            # A failed query leaves psycopg2's non-autocommit connection
+            # "idle in transaction" until something rolls it back - and this
+            # connection is long-lived (one per process), so every later
+            # call would otherwise fail with InFailedSqlTransaction forever,
+            # not just this one. Roll back so the connection stays usable,
+            # then let the caller see the original failure.
+            self._conn.rollback()
+            raise
 
     def update_rating(self, username: str, rating: int) -> None:
-        with self._conn.cursor() as cur:
-            cur.execute("UPDATE users SET rating = %s WHERE username = %s", (rating, username))
-        self._conn.commit()
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("UPDATE users SET rating = %s WHERE username = %s", (rating, username))
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def get_rating(self, username: str) -> int | None:
-        with self._conn.cursor() as cur:
-            cur.execute("SELECT rating FROM users WHERE username = %s", (username,))
-            row = cur.fetchone()
-            self._conn.commit()  # read-only - see authenticate()'s own comment on why this still matters
-            return row[0] if row else None
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT rating FROM users WHERE username = %s", (username,))
+                row = cur.fetchone()
+                self._conn.commit()  # read-only - see authenticate()'s own comment on why this still matters
+                return row[0] if row else None
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def close(self) -> None:
         self._conn.close()

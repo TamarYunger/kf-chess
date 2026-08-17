@@ -14,6 +14,38 @@ import pytest
 from server.db import DEFAULT_RATING, PostgresAccountStore
 
 
+class _ExplodingCursor:
+    """A cursor stand-in whose execute() always raises - for simulating a
+    transient query failure (a deadlock, a statement timeout, ...) without
+    actually needing Postgres to produce one on demand."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, *args, **kwargs):
+        raise psycopg2.OperationalError("simulated failure")
+
+
+class _ExplodingConnection:
+    """Wraps a real psycopg2 connection so cursor() blows up on the next
+    query, while rollback()/commit()/get_transaction_status() (psycopg2's
+    connection.cursor is a read-only C attribute, so it can't be patched
+    directly) still reach the real connection - letting a test verify the
+    real rollback actually happened."""
+
+    def __init__(self, real_conn):
+        self._real = real_conn
+
+    def cursor(self):
+        return _ExplodingCursor()
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 def _dsn():
     return (
         f"host={os.environ.get('POSTGRES_HOST', 'localhost')} "
@@ -112,6 +144,54 @@ def test_get_rating_does_not_leave_an_open_transaction(store):
     store.get_rating("alice")
 
     assert store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+
+
+def test_authenticate_rolls_back_and_recovers_after_a_failed_query(store):
+    # Regression: a query failure used to leave this long-lived connection
+    # "idle in transaction" forever (no rollback), poisoning every later
+    # call on the same process with InFailedSqlTransaction.
+    real_conn = store._conn
+    store._conn = _ExplodingConnection(real_conn)
+    try:
+        with pytest.raises(psycopg2.OperationalError):
+            store.authenticate("alice", "secret123")
+    finally:
+        store._conn = real_conn
+
+    assert store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+    ok, rating, error = store.authenticate("alice", "secret123")  # connection must still work
+    assert ok is True
+
+
+def test_update_rating_rolls_back_and_recovers_after_a_failed_query(store):
+    store.authenticate("alice", "secret123")
+
+    real_conn = store._conn
+    store._conn = _ExplodingConnection(real_conn)
+    try:
+        with pytest.raises(psycopg2.OperationalError):
+            store.update_rating("alice", 1300)
+    finally:
+        store._conn = real_conn
+
+    assert store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+    store.update_rating("alice", 1300)  # connection must still work
+    assert store.get_rating("alice") == 1300
+
+
+def test_get_rating_rolls_back_and_recovers_after_a_failed_query(store):
+    store.authenticate("alice", "secret123")
+
+    real_conn = store._conn
+    store._conn = _ExplodingConnection(real_conn)
+    try:
+        with pytest.raises(psycopg2.OperationalError):
+            store.get_rating("alice")
+    finally:
+        store._conn = real_conn
+
+    assert store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+    assert store.get_rating("alice") == DEFAULT_RATING  # connection must still work
 
 
 def test_two_different_usernames_are_independent_accounts(store):

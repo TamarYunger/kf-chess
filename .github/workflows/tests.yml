@@ -29,36 +29,40 @@ jobs:
       # user+database that docker-compose.yml's postgres service uses
       # locally, instead of reaching for `# pragma: no cover`.
       - name: Start PostgreSQL and create the kfchess database
+        # The pre-installed PostgreSQL 17 Windows *service* refuses to
+        # start on this runner image with a generic SCM-level error that
+        # leaves no trace anywhere (not PostgreSQL's own log, not the
+        # System event log's Service Control Manager entries - confirmed
+        # across several prior attempts). But the data directory itself is
+        # a genuine, already-initialized PG data dir that PostgreSQL can
+        # demonstrably run against (its own log shows a clean startup/
+        # shutdown from when the runner image was built) - so the problem
+        # is specifically with Windows' service wrapper, not PostgreSQL.
+        # Skip the service entirely and run pg_ctl directly instead.
         shell: pwsh
         run: |
-          $service = Get-Service -Name "postgresql*" | Select-Object -First 1
-          # windows-latest currently maps to windows-2025, which has a known
-          # PostgreSQL 17 data-directory permission bug (actions/runner-images
-          # #13040, unresolved as of writing): the service account can't
-          # access its own data dir, so Start-Service fails with "Permission
-          # denied" before ever reaching our own setup. Grant that account
-          # access first - remove this once GitHub ships the real fix.
-          $account = (Get-CimInstance Win32_Service -Filter "Name='$($service.Name)'").StartName
-          $dataDir = "C:\Program Files\PostgreSQL\17\data"
-          icacls $dataDir /grant "${account}:(OI)(CI)F" /T | Out-Null
-          try {
-            Start-Service $service.Name -ErrorAction Stop
-          } catch {
-            # The icacls grant above is a guess at the actual cause (issue
-            # #13040 reports a permission error, not the generic message
-            # Start-Service itself gives) - if it's still broken, print
-            # PostgreSQL's own log instead of failing blind a second time.
-            Write-Host "Start-Service failed: $_"
-            $logDir = Join-Path $dataDir "log"
-            if (Test-Path $logDir) {
-              Get-ChildItem $logDir -Filter "*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
-                ForEach-Object { Write-Host "--- $($_.FullName) ---"; Get-Content $_.FullName -Tail 50 }
-            } else {
-              Write-Host "No PostgreSQL log directory found at $logDir"
-            }
-            throw
+          $service = Get-CimInstance Win32_Service -Filter "Name LIKE 'postgresql%'" | Select-Object -First 1
+          $dataDir = if ($service.PathName -match '-D\s*"?([^"]+?)"?(\s|$)') { $Matches[1] } else { $null }
+          if (-not $dataDir) { throw "Could not resolve PostgreSQL data dir from service PathName: $($service.PathName)" }
+
+          # The pre-installed instance's postgres superuser password isn't
+          # "postgres" (confirmed: pg_ctl start succeeds, but psql then gets
+          # password authentication failed) and isn't documented anywhere -
+          # this VM is torn down right after the job, so instead of guessing
+          # a password, just trust local connections outright. Edited before
+          # starting the server so postgres picks it up on its own at boot.
+          $hbaPath = Join-Path $dataDir "pg_hba.conf"
+          "host all all 127.0.0.1/32 trust`nhost all all ::1/128 trust`n" + (Get-Content $hbaPath -Raw) |
+            Set-Content $hbaPath
+
+          $startupLog = Join-Path $dataDir "log\startup.log"
+          & "$env:PGBIN\pg_ctl.exe" start -D $dataDir -l $startupLog -w
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "pg_ctl start failed with exit code $LASTEXITCODE"
+            Get-Content $startupLog -Tail 50 -ErrorAction SilentlyContinue
+            throw "pg_ctl start failed"
           }
-          $env:PGPASSWORD = "postgres"
+
           & "$env:PGBIN\psql" -U postgres -h localhost -c "CREATE USER kfchess WITH PASSWORD 'kfchess';"
           & "$env:PGBIN\psql" -U postgres -h localhost -c "CREATE DATABASE kfchess OWNER kfchess;"
 

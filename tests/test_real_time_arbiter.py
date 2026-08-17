@@ -246,6 +246,23 @@ def test_shortest_crossing_wins_when_a_path_crosses_multiple_moves():
     assert horizontal.end == (4, 1)
 
 
+def test_exact_tie_at_a_crossing_still_stops_the_later_registered_move():
+    # Regression: a strict "my_time > other_time" comparison let two
+    # same-color moves reach a shared cell at the *exact* same simulated
+    # time without either one stopping - whichever settled first would land
+    # there, and the other would then find its own destination occupied and
+    # silently fizzle (or, for a non-shared destination, both would try to
+    # occupy the same intermediate cell). The move being registered here
+    # must still yield on an exact tie, same as it would a moment later.
+    arbiter, board = make_arbiter(_empty_board())
+    arbiter.start_move("wR", (0, 0), (0, 3))  # passes through (0, 1) at step 1
+    arbiter.start_move("wR", (1, 1), (0, 1))  # also reaches (0, 1) at step 1, same start time
+
+    mover = next(m for m in arbiter.active_moves if m.start == (1, 1))
+    assert mover.end == (1, 1)  # never left its own start
+    assert mover.path == ()
+
+
 def test_clock_advances_with_time():
     arbiter, board = make_arbiter([["wR", ".", "."]])
     assert arbiter.clock == 0

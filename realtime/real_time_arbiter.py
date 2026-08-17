@@ -209,7 +209,11 @@ class RealTimeArbiter:
                 j = other.path.index(cell)
                 my_time = start_time + (i + 1) * duration
                 other_time = other_start_time + (j + 1) * duration
-                if my_time > other_time and (cutoff is None or i < cutoff):
+                # >=, not > : the docstring's own rule is "reaches the
+                # shared cell no later than this new mover does" - an exact
+                # tie is "no later", so this mover must still yield instead
+                # of both landing on the same cell at once.
+                if my_time >= other_time and (cutoff is None or i < cutoff):
                     cutoff = i
         return path if cutoff is None else path[:cutoff]
 

@@ -56,6 +56,7 @@ import time
 from types import ModuleType
 from typing import Callable
 
+from board.loaders import STANDARD_BOARD_TEXT
 from bus.event_bus import EventBus
 from config import settings
 from game.engine_factory import build_engine
@@ -91,17 +92,6 @@ TICK_INTERVAL_SECONDS = 0.05
 # that a genuinely crashed Shard's entries clear out in a few seconds
 # rather than lingering forever.
 PRESENCE_TTL_SECONDS = 10
-
-STANDARD_BOARD_TEXT = [
-    "bR bN bB bQ bK bB bN bR",
-    "bP bP bP bP bP bP bP bP",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    "wP wP wP wP wP wP wP wP",
-    "wR wN wB wQ wK wB wN wR",
-]
 
 
 class GameShard:

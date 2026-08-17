@@ -14,6 +14,23 @@ class BoardParseError(Exception):
     """Raised when external board input is malformed for its format."""
 
 
+# The standard chess starting position, in load_text_board's own text
+# format - shared so every composition root that needs a default board
+# (main_gui.py's offline session, server/shard.py's per-room engine) uses
+# the exact same literal instead of each keeping its own copy that could
+# silently drift out of sync with the others.
+STANDARD_BOARD_TEXT = [
+    "bR bN bB bQ bK bB bN bR",
+    "bP bP bP bP bP bP bP bP",
+    ". . . . . . . .",
+    ". . . . . . . .",
+    ". . . . . . . .",
+    ". . . . . . . .",
+    "wP wP wP wP wP wP wP wP",
+    "wR wN wB wQ wK wB wN wR",
+]
+
+
 def _valid_text_tokens(registry: PieceRuleRegistry, colors: tuple[str, ...], empty_token: str) -> set[str]:
     """Valid tokens are derived from whatever piece kinds are registered,
     rather than a hardcoded string - so registering a custom piece kind

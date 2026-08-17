@@ -17,6 +17,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Callable
 
+from board.loaders import STANDARD_BOARD_TEXT
 from bus.event_bus import EventBus
 from config import settings
 from client.session.local_game_session import LocalGameSession
@@ -31,17 +32,6 @@ if TYPE_CHECKING:
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CLIENT_LOG_PATH = PROJECT_ROOT / "logs" / "client.log"
-
-STANDARD_BOARD_TEXT = [
-    "bR bN bB bQ bK bB bN bR",
-    "bP bP bP bP bP bP bP bP",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    ". . . . . . . .",
-    "wP wP wP wP wP wP wP wP",
-    "wR wN wB wQ wK wB wN wR",
-]
 
 
 def build_session(events: EventBus, config: ModuleType, board_lines: list[str] | None = None) -> LocalGameSession:

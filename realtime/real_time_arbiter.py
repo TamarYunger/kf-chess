@@ -222,11 +222,17 @@ class RealTimeArbiter:
             # occupies.
             return None
 
-        if self._is_intercepted(move):
+        interceptor = self._interceptor(move)
+        if interceptor is not None:
             # The moving piece is captured mid-flight by the jumping piece,
             # so it is removed from its source rather than surviving there.
+            # The jump itself never left its cell, so it - not the mover -
+            # is what "arrives": report it as the capturing piece so
+            # GameEngine's win-condition check (and scoring) see this
+            # capture exactly like an ordinary one, instead of silently
+            # dropping it.
             self._board.set(*move.start, self._config.EMPTY_CELL)
-            return None
+            return ArrivalEvent(piece=interceptor.piece, destination=move.end, captured=move.piece)
 
         r, c = move.end
         target = self._board.get(r, c)
@@ -243,11 +249,12 @@ class RealTimeArbiter:
         self._record_arrival(piece, (r, c), kind="move")
         return ArrivalEvent(piece=piece, destination=(r, c), captured=captured)
 
-    def _is_intercepted(self, move: Move) -> bool:
+    def _interceptor(self, move: Move) -> Jump | None:
         r, c = move.end
-        return any(
-            jump.cell == (r, c) and color_of(jump.piece) != color_of(move.piece)
-            for jump in self._active_jumps
+        return next(
+            (jump for jump in self._active_jumps
+             if jump.cell == (r, c) and color_of(jump.piece) != color_of(move.piece)),
+            None,
         )
 
     def _resolve_jumps(self) -> None:

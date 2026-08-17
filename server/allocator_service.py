@@ -38,7 +38,7 @@ import random
 import secrets
 from typing import Callable
 
-from server.db import build_redis_client
+from server.db import build_redis_client, decode_redis_value
 from server.health import start_health_server
 from server.logging_config import configure_server_logging
 from server.nats_connection import NatsConnectionProxy
@@ -66,10 +66,6 @@ SHARD_INBOX_SUBJECT_TEMPLATE = "shard.inbox.{instance_id}"
 PRESENCE_TTL_SECONDS = 10
 
 
-def _decode(value: bytes | str) -> str:
-    return value.decode("utf-8") if isinstance(value, bytes) else value
-
-
 class AllocatorService:
     def __init__(self, nats_client: object, redis_client: object) -> None:
         self._nats = nats_client
@@ -82,7 +78,7 @@ class AllocatorService:
         """Power-of-two-choices over every Shard currently heartbeating -
         see this module's own docstring. Returns None if no Shard is
         reachable at all (nothing heartbeating in Redis right now)."""
-        keys = [_decode(key) for key in self._redis.keys("shard:heartbeat:*")]
+        keys = [decode_redis_value(key) for key in self._redis.keys("shard:heartbeat:*")]
         instance_ids = [key[len("shard:heartbeat:"):] for key in keys]
         if not instance_ids:
             return None

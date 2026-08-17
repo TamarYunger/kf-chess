@@ -45,7 +45,7 @@ from typing import Callable
 import websockets
 
 from config import settings
-from server.db import build_redis_client
+from server.db import build_redis_client, decode_redis_value
 from server.health import start_health_server
 from server.logging_config import configure_server_logging
 from server.protocol import ProtocolError, encode_error, encode_login, encode_login_rejected, parse_command
@@ -346,11 +346,9 @@ class GameServer:
         about (_forward_command does; the disconnect notification in
         handle_connection doesn't need to, the connection's closing
         regardless)."""
-        instance_id = await asyncio.to_thread(self._redis.get, f"room_owner:{room_id}")
+        instance_id = decode_redis_value(await asyncio.to_thread(self._redis.get, f"room_owner:{room_id}"))
         if instance_id is None:
             return None
-        if isinstance(instance_id, bytes):
-            instance_id = instance_id.decode("utf-8")
         await self._nats.publish(SHARD_INBOX_SUBJECT_TEMPLATE.format(instance_id=instance_id),
                                   json.dumps(envelope).encode("utf-8"))
         return instance_id

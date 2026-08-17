@@ -88,6 +88,17 @@ class AccountStore:
         self._conn.close()
 
 
+def decode_redis_value(value: bytes | str | None) -> str | None:
+    """redis.Redis (unlike redis.Redis(decode_responses=True)) hands back
+    raw bytes for anything it stored - every module reading a value it
+    expects to use as a plain string (an instance_id, a connection_id) was
+    independently re-typing this same isinstance check, some as their own
+    private _decode() helper. Shared here since server/db.py already owns
+    build_redis_client, the other piece of "how this codebase talks to
+    Redis" wiring."""
+    return value.decode("utf-8") if isinstance(value, bytes) else value
+
+
 def build_redis_client() -> "redis.Redis":
     """The real Redis connection main() (both server/ws_server.py's and
     server/api_gateway.py's) builds for production use - the one place

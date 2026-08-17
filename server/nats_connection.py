@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+from server.db import decode_redis_value
+
 
 class NatsConnectionProxy:
     def __init__(self, nats_client: object, redis_client: object, connection_id: str) -> None:
@@ -33,10 +35,8 @@ class NatsConnectionProxy:
         # event loop (every other connection/room it's holding) for as long
         # as Redis takes to answer. Running it in a worker thread keeps this
         # one send() waiting without stalling anything else on the loop.
-        instance_id = await asyncio.to_thread(self._redis.get, f"connection:{self.connection_id}")
+        instance_id = decode_redis_value(await asyncio.to_thread(self._redis.get, f"connection:{self.connection_id}"))
         if instance_id is None:
             return  # the owning Gateway instance is gone - nothing to deliver to
-        if isinstance(instance_id, bytes):
-            instance_id = instance_id.decode("utf-8")
         envelope = json.dumps({"connection_id": self.connection_id, "message": message})
         await self._nats.publish(f"outbox.{instance_id}", envelope.encode("utf-8"))

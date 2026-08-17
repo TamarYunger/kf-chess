@@ -31,7 +31,7 @@ import os
 import time
 from typing import Callable
 
-from server.db import build_redis_client
+from server.db import build_redis_client, decode_redis_value
 from server.health import start_health_server
 from server.logging_config import configure_server_logging
 from server.matchmaking import find_opponent
@@ -60,10 +60,6 @@ TICK_INTERVAL_SECONDS = 0.05
 # player gets "no_match" instead - same value server/ws_server.py used
 # before this split.
 MATCHMAKING_TIMEOUT_SECONDS = 60
-
-
-def _decode(value: bytes | str) -> str:
-    return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
 class MatchmakerService:
@@ -102,7 +98,7 @@ class MatchmakerService:
             return  # already searching - PLAY is a no-op, same guard ws_server.py used to apply
 
         waiting = [
-            (_decode(other_id), json.loads(raw)["rating"])
+            (decode_redis_value(other_id), json.loads(raw)["rating"])
             for other_id, raw in self._redis.hgetall(QUEUE_KEY).items()
         ]
         opponent_id = find_opponent(envelope["rating"], waiting)
@@ -135,7 +131,7 @@ class MatchmakerService:
         for connection_id, raw in list(self._redis.hgetall(QUEUE_KEY).items()):
             info = json.loads(raw)
             if now - info["queued_at"] >= MATCHMAKING_TIMEOUT_SECONDS:
-                connection_id = _decode(connection_id)
+                connection_id = decode_redis_value(connection_id)
                 self._redis.hdel(QUEUE_KEY, connection_id)
                 logger.info("%s's matchmaking search timed out", info["username"])
                 await self._proxy_for(connection_id).send(json.dumps(encode_no_match()))

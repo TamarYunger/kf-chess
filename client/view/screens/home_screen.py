@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 from bus.event_types import NO_MATCH
 from client.view.button import Button
-from client.view.graphics_renderer import GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GAP, GAME_OVER_TEXT_COLOR
+from client.view.graphics_renderer import draw_centered_banner
 from client.view.img import Img
 from client.view.screen_manager import Screen
 from client.view.screens.room_dialog import RoomDialog
@@ -131,21 +131,8 @@ class HomeScreen(Screen):
         )
 
     def _draw_searching_overlay(self, canvas: Img) -> None:
-        # Mirrors GraphicsRenderer._draw_game_over_banner's own pattern -
-        # dim the whole canvas, then stack centered lines of text - reusing
-        # its exact color/gap constants for visual consistency.
         elapsed_seconds = int(time.time() - self._searching_since)
-        h, w = canvas.img.shape[:2]
-        canvas.blend_rect(0, 0, h, w, (0, 0, 0), GAME_OVER_DIM_ALPHA)
-
-        lines = [SEARCHING_LINE_1, f"({elapsed_seconds}s)"]
-        styles = [(SEARCHING_FONT_SCALE_1, SEARCHING_THICKNESS), (SEARCHING_FONT_SCALE_2, SEARCHING_THICKNESS)]
-        sizes = [canvas.text_size(text, scale, thickness) for text, (scale, thickness) in zip(lines, styles)]
-
-        total_height = sum(size[1] for size in sizes) + GAME_OVER_LINE_GAP * (len(lines) - 1)
-        y = (h - total_height) // 2
-        for text, (scale, thickness), (text_w, text_h) in zip(lines, styles, sizes):
-            x = (w - text_w) // 2
-            y += text_h
-            canvas.put_text(text, x, y, scale, GAME_OVER_TEXT_COLOR, thickness)
-            y += GAME_OVER_LINE_GAP
+        draw_centered_banner(canvas, [
+            (SEARCHING_LINE_1, SEARCHING_FONT_SCALE_1, SEARCHING_THICKNESS),
+            (f"({elapsed_seconds}s)", SEARCHING_FONT_SCALE_2, SEARCHING_THICKNESS),
+        ])

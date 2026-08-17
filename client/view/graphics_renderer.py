@@ -88,6 +88,51 @@ SIDE_PANEL_TEXT_FONT_SCALE = 0.5
 SIDE_PANEL_LINE_HEIGHT = 22
 
 
+def draw_centered_banner(
+    canvas: Img,
+    lines: list[tuple[str, float, int]],
+    dim_alpha: float = GAME_OVER_DIM_ALPHA,
+    text_color: tuple = GAME_OVER_TEXT_COLOR,
+    line_gap: int = GAME_OVER_LINE_GAP,
+) -> None:
+    """Dims the whole canvas, then stacks `lines` (each a (text, font_scale,
+    thickness) triple) centered both ways - the shared shape behind
+    GraphicsRenderer's own game-over banner and every screen-level
+    "waiting"/"searching"/"disconnected" overlay (home_screen.py's
+    _draw_searching_overlay, game_screen.py's _draw_waiting_overlay/
+    _draw_disconnect_overlay), which used to each carry their own copy of
+    this dim+stack+center logic."""
+    h, w = canvas.img.shape[:2]
+    canvas.blend_rect(0, 0, h, w, (0, 0, 0), dim_alpha)
+
+    sizes = [canvas.text_size(text, scale, thickness) for text, scale, thickness in lines]
+    total_height = sum(size[1] for size in sizes) + line_gap * (len(lines) - 1)
+    y = (h - total_height) // 2
+    for (text, scale, thickness), (text_w, text_h) in zip(lines, sizes):
+        x = (w - text_w) // 2
+        y += text_h
+        canvas.put_text(text, x, y, scale, text_color, thickness)
+        y += line_gap
+
+
+def draw_bottom_banner(
+    canvas: Img, message: str, font_scale: float, thickness: int, padding: int,
+    text_color: tuple, bar_color: tuple, bar_alpha: float,
+) -> None:
+    """A bottom bar sized to `message`, its text centered on it - the shared
+    shape behind GraphicsRenderer's own move-rejection banner and
+    LoginScreen's identically-styled error banner, which used to each carry
+    their own copy of this exact layout."""
+    h, w = canvas.img.shape[:2]
+    text_w, text_h = canvas.text_size(message, font_scale, thickness)
+    bar_h = text_h + 2 * padding
+    top = h - bar_h
+    canvas.blend_rect(top, 0, h, w, bar_color, bar_alpha)
+    x = (w - text_w) // 2
+    y = h - padding - 2
+    canvas.put_text(message, x, y, font_scale, text_color, thickness)
+
+
 class GraphicsRenderer:
     """Renders a GameSnapshot onto an Img canvas, the graphical counterpart
     to BoardRenderer.render's plain text. Consumes
@@ -151,11 +196,18 @@ class GraphicsRenderer:
             self._sprite_cache[key] = sprite
         return sprite
 
-    def _draw_selection(self, canvas: Img, cell: tuple[int, int]) -> None:
+    def _cell_rect(self, row: int, col: int) -> tuple[tuple[int, int], tuple[int, int]]:
+        """(top_left, bottom_right) pixel corners of board cell (row, col) -
+        shared by every draw method that outlines or fills a whole cell,
+        instead of each recomputing the same col*cell_size/row*cell_size
+        math on its own."""
         cell_size = self._config.CELL_SIZE
-        row, col = cell
         top_left = (col * cell_size, row * cell_size)
-        bottom_right = ((col + 1) * cell_size, (row + 1) * cell_size)
+        bottom_right = (top_left[0] + cell_size, top_left[1] + cell_size)
+        return top_left, bottom_right
+
+    def _draw_selection(self, canvas: Img, cell: tuple[int, int]) -> None:
+        top_left, bottom_right = self._cell_rect(*cell)
         canvas.rectangle(top_left, bottom_right, SELECTION_COLOR, SELECTION_THICKNESS)
 
     def _draw_legal_destination(self, canvas: Img, snapshot: GameSnapshot, cell: tuple[int, int]) -> None:
@@ -173,9 +225,7 @@ class GraphicsRenderer:
         canvas.blend_circle(cx, cy, radius, LEGAL_MOVE_DOT_COLOR, LEGAL_MOVE_DOT_ALPHA)
 
     def _draw_legal_capture_ring(self, canvas: Img, row: int, col: int) -> None:
-        cell_size = self._config.CELL_SIZE
-        top_left = (col * cell_size, row * cell_size)
-        bottom_right = ((col + 1) * cell_size, (row + 1) * cell_size)
+        top_left, bottom_right = self._cell_rect(row, col)
         canvas.rectangle(top_left, bottom_right, LEGAL_CAPTURE_RING_COLOR, LEGAL_CAPTURE_RING_THICKNESS)
 
     def _draw_rest_overlay(self, canvas: Img, cell: tuple[int, int], rest_fraction: float) -> None:
@@ -188,44 +238,22 @@ class GraphicsRenderer:
         if height <= 0:
             return
 
-        left = col * cell_size
-        right = left + cell_size
-        top = row * cell_size + (cell_size - height)
-        bottom = row * cell_size + cell_size
+        (left, _), (right, bottom) = self._cell_rect(row, col)
+        top = bottom - height
         canvas.blend_rect(top, left, bottom, right, REST_OVERLAY_COLOR, REST_OVERLAY_MAX_ALPHA)
 
     def _draw_game_over_banner(self, canvas: Img, snapshot: GameSnapshot) -> None:
-        h, w = canvas.img.shape[:2]
-        canvas.blend_rect(0, 0, h, w, (0, 0, 0), GAME_OVER_DIM_ALPHA)
-
-        lines = ["GAME OVER"]
+        lines = [("GAME OVER", 2.0, 5)]
         if snapshot.winner is not None:
             name = COLOR_NAMES.get(snapshot.winner, snapshot.winner.upper())
-            lines.append(f"{name} WINS")
-
-        styles = [(2.0, 5) if i == 0 else (1.1, 3) for i in range(len(lines))]
-        sizes = [canvas.text_size(text, scale, thickness)
-                 for text, (scale, thickness) in zip(lines, styles)]
-
-        total_height = sum(size[1] for size in sizes) + GAME_OVER_LINE_GAP * (len(lines) - 1)
-        y = (h - total_height) // 2
-        for text, (scale, thickness), (text_w, text_h) in zip(lines, styles, sizes):
-            x = (w - text_w) // 2
-            y += text_h
-            canvas.put_text(text, x, y, scale, GAME_OVER_TEXT_COLOR, thickness)
-            y += GAME_OVER_LINE_GAP
+            lines.append((f"{name} WINS", 1.1, 3))
+        draw_centered_banner(canvas, lines)
 
     def _draw_rejection_banner(self, canvas: Img, message: str) -> None:
-        h, w = canvas.img.shape[:2]
-        text_w, text_h = canvas.text_size(message, REJECTION_FONT_SCALE, REJECTION_THICKNESS)
-
-        bar_h = text_h + 2 * REJECTION_PADDING
-        top = h - bar_h
-        canvas.blend_rect(top, 0, h, w, REJECTION_BAR_COLOR, REJECTION_BAR_ALPHA)
-
-        x = (w - text_w) // 2
-        y = h - REJECTION_PADDING - 2
-        canvas.put_text(message, x, y, REJECTION_FONT_SCALE, REJECTION_TEXT_COLOR, REJECTION_THICKNESS)
+        draw_bottom_banner(
+            canvas, message, REJECTION_FONT_SCALE, REJECTION_THICKNESS, REJECTION_PADDING,
+            REJECTION_TEXT_COLOR, REJECTION_BAR_COLOR, REJECTION_BAR_ALPHA,
+        )
 
     def _with_side_panels(self, board_canvas: Img, snapshot: GameSnapshot) -> Img:
         """Returns a new, wider canvas: a panel for the first color on the

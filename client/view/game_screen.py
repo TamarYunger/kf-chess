@@ -8,8 +8,7 @@ from bus.event_types import (
     CLICK, JUMP, OPPONENT_DISCONNECTED, OPPONENT_RECONNECTED, RESIGN, ROOM, ROOM_STARTED, VIEWER,
     WAITING_FOR_OPPONENT,
 )
-from client.view.graphics_renderer import COLOR_NAMES, GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GAP, GAME_OVER_TEXT_COLOR
-from client.view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
+from client.view.graphics_renderer import COLOR_NAMES, GraphicsRenderer, SIDE_PANEL_WIDTH, draw_centered_banner
 from client.view.img import Img
 from client.view.screen_manager import Screen
 
@@ -189,13 +188,7 @@ class GameScreen(Screen):
         self._waiting_for_opponent = False
 
     def _draw_waiting_overlay(self, canvas: Img) -> None:
-        h, w = canvas.img.shape[:2]
-        canvas.blend_rect(0, 0, h, w, (0, 0, 0), GAME_OVER_DIM_ALPHA)
-        text_w, text_h = canvas.text_size(WAITING_LINE_1, WAITING_FONT_SCALE_1, WAITING_THICKNESS)
-        canvas.put_text(
-            WAITING_LINE_1, (w - text_w) // 2, (h + text_h) // 2,
-            WAITING_FONT_SCALE_1, GAME_OVER_TEXT_COLOR, WAITING_THICKNESS,
-        )
+        draw_centered_banner(canvas, [(WAITING_LINE_1, WAITING_FONT_SCALE_1, WAITING_THICKNESS)])
 
     # -- opponent disconnect countdown ----------------------------------
 
@@ -206,21 +199,8 @@ class GameScreen(Screen):
         self._disconnect_deadline = None
 
     def _draw_disconnect_overlay(self, canvas: Img) -> None:
-        # Mirrors GraphicsRenderer._draw_game_over_banner's own pattern -
-        # dim the whole canvas, then stack centered lines of text - reusing
-        # its exact color/gap constants for visual consistency.
         remaining_seconds = max(0, int(self._disconnect_deadline - time.time()))
-        h, w = canvas.img.shape[:2]
-        canvas.blend_rect(0, 0, h, w, (0, 0, 0), GAME_OVER_DIM_ALPHA)
-
-        lines = [DISCONNECT_LINE_1, f"Auto-resign in {remaining_seconds}s"]
-        styles = [(DISCONNECT_FONT_SCALE_1, DISCONNECT_THICKNESS), (DISCONNECT_FONT_SCALE_2, DISCONNECT_THICKNESS)]
-        sizes = [canvas.text_size(text, scale, thickness) for text, (scale, thickness) in zip(lines, styles)]
-
-        total_height = sum(size[1] for size in sizes) + GAME_OVER_LINE_GAP * (len(lines) - 1)
-        y = (h - total_height) // 2
-        for text, (scale, thickness), (text_w, text_h) in zip(lines, styles, sizes):
-            x = (w - text_w) // 2
-            y += text_h
-            canvas.put_text(text, x, y, scale, GAME_OVER_TEXT_COLOR, thickness)
-            y += GAME_OVER_LINE_GAP
+        draw_centered_banner(canvas, [
+            (DISCONNECT_LINE_1, DISCONNECT_FONT_SCALE_1, DISCONNECT_THICKNESS),
+            (f"Auto-resign in {remaining_seconds}s", DISCONNECT_FONT_SCALE_2, DISCONNECT_THICKNESS),
+        ])

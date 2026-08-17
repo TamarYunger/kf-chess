@@ -6,7 +6,7 @@ from bus.event_types import LOGIN_REJECTED
 from client.view.button import Button
 from client.view.graphics_renderer import (
     REJECTION_BAR_ALPHA, REJECTION_BAR_COLOR, REJECTION_FONT_SCALE, REJECTION_PADDING,
-    REJECTION_TEXT_COLOR, REJECTION_THICKNESS,
+    REJECTION_TEXT_COLOR, REJECTION_THICKNESS, draw_bottom_banner,
 )
 from client.view.img import Img
 from client.view.screen_manager import Screen
@@ -135,11 +135,7 @@ class LoginScreen(Screen):
         self._error_message = payload.get("message", "Login rejected")
 
     def _draw_error_banner(self, canvas: Img, message: str) -> None:
-        h, w = canvas.img.shape[:2]
-        text_w, text_h = canvas.text_size(message, REJECTION_FONT_SCALE, REJECTION_THICKNESS)
-        bar_h = text_h + 2 * REJECTION_PADDING
-        top = h - bar_h
-        canvas.blend_rect(top, 0, h, w, REJECTION_BAR_COLOR, REJECTION_BAR_ALPHA)
-        x = (w - text_w) // 2
-        y = h - REJECTION_PADDING - 2
-        canvas.put_text(message, x, y, REJECTION_FONT_SCALE, REJECTION_TEXT_COLOR, REJECTION_THICKNESS)
+        draw_bottom_banner(
+            canvas, message, REJECTION_FONT_SCALE, REJECTION_THICKNESS, REJECTION_PADDING,
+            REJECTION_TEXT_COLOR, REJECTION_BAR_COLOR, REJECTION_BAR_ALPHA,
+        )

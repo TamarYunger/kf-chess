@@ -38,7 +38,7 @@ def test_first_seat_or_view_gets_the_first_color():
     role = room.seat_or_view(conn, "alice", 1200)
 
     assert role == settings.COLORS[0]
-    assert room.role_of(conn) == settings.COLORS[0]
+    assert room._seats[conn] == settings.COLORS[0]
 
 
 def test_second_seat_or_view_gets_the_second_color():
@@ -60,13 +60,7 @@ def test_third_seat_or_view_becomes_a_viewer():
     role = room.seat_or_view(carol, "carol", 1180)
 
     assert role == "viewer"
-    assert room.role_of(carol) == "viewer"
-
-
-def test_role_of_an_unknown_connection_is_none():
-    room, engine = make_room()
-
-    assert room.role_of(FakeConnection()) is None
+    assert carol in room._viewers
 
 
 def test_welcome_sends_room_confirmation_then_snapshot():
@@ -337,7 +331,7 @@ def test_reconnect_with_the_same_username_reclaims_the_seat():
 
         assert role == role_alice
         assert role_alice not in room._disconnected
-        assert room.role_of(new_connection) == role_alice
+        assert room._seats[new_connection] == role_alice
 
     run(scenario())
 
@@ -396,7 +390,7 @@ def test_tick_advances_the_clock_and_resolves_an_expired_disconnect_into_a_resig
         await room.tick(time.monotonic())
 
         assert engine.game_over is True
-        assert engine.winner == role_bob
+        assert engine._winner == role_bob
         assert role_alice not in room._disconnected
 
     run(scenario())
@@ -445,7 +439,7 @@ def test_game_over_updates_both_ratings_via_the_shared_events_bus():
         engine.wait(3 * settings.MOVE_DURATION)
 
         assert engine.game_over is True
-        winner_username = "alice" if role_alice == engine.winner else "bob"
+        winner_username = "alice" if role_alice == engine._winner else "bob"
         loser_username = "bob" if winner_username == "alice" else "alice"
         assert accounts.get_rating(winner_username) > 1200
         assert accounts.get_rating(loser_username) < 1200

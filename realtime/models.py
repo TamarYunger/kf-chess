@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from board.piece import Piece
+
 
 @dataclass(frozen=True)
 class Move:
@@ -15,7 +17,7 @@ class Move:
     intermediate squares, so they can never cross another move's path.
     """
 
-    piece: str
+    piece: Piece
     start: tuple
     end: tuple
     arrival: int
@@ -29,7 +31,7 @@ class Jump:
     While airborne it can intercept an enemy Move arriving on the same cell.
     """
 
-    piece: str
+    piece: Piece
     cell: tuple
     end_time: int
 
@@ -44,7 +46,7 @@ class Arrival:
     ("move" piece settle into long_rest, "jump" pieces into short_rest).
     """
 
-    piece: str
+    piece: Piece
     cell: tuple
     at: int
     kind: str

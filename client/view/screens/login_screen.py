@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from bus.event_types import LOGIN_REJECTED
 from client.view.button import Button
 from client.view.graphics_renderer import (
@@ -9,6 +11,10 @@ from client.view.graphics_renderer import (
 from client.view.img import Img
 from client.view.screen_manager import Screen
 from client.view.text_input import TextInput
+
+if TYPE_CHECKING:
+    from bus.event_bus import EventBus
+    from client.session.game_session import GameSession
 
 SCREEN_WIDTH = 480
 SCREEN_HEIGHT = 340
@@ -48,7 +54,7 @@ class LoginScreen(Screen):
     move already gives on the board.
     """
 
-    def __init__(self, session, events):
+    def __init__(self, session: GameSession, events: EventBus) -> None:
         self._session = session
         self._events = events
         self._username_field = TextInput(
@@ -59,18 +65,18 @@ class LoginScreen(Screen):
             FIELD_X, PASSWORD_FIELD_Y, FIELD_WIDTH, FIELD_HEIGHT,
             placeholder="Password", hidden=True, on_submit=self._on_submit,
         )
-        self._error_message = None
+        self._error_message: str | None = None
         self._button = Button(BUTTON_X, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT, BUTTON_LABEL, BUTTON_COLOR)
         events.subscribe(LOGIN_REJECTED, self._on_login_rejected)
 
-    def on_enter(self):
+    def on_enter(self) -> None:
         self._username_field.clear()
         self._password_field.clear()
         self._password_field.blur()
         self._username_field.focus()
         self._error_message = None
 
-    def render(self, canvas):
+    def render(self, canvas: Img) -> None:
         canvas.img = Img.create(SCREEN_WIDTH, SCREEN_HEIGHT, color=BG_COLOR).img
         text_w, _ = canvas.text_size(TITLE_TEXT, TITLE_FONT_SCALE, 2)
         canvas.put_text(TITLE_TEXT, (SCREEN_WIDTH - text_w) // 2, TITLE_Y, TITLE_FONT_SCALE, TITLE_COLOR, 2)
@@ -82,7 +88,7 @@ class LoginScreen(Screen):
         if self._error_message is not None:
             self._draw_error_banner(canvas, self._error_message)
 
-    def handle_click(self, x, y):
+    def handle_click(self, x: int, y: int) -> None:
         if self._username_field.handle_click(x, y):
             return  # the field claimed this click (and is now focused)
         if self._password_field.handle_click(x, y):
@@ -90,7 +96,7 @@ class LoginScreen(Screen):
         if self._button.contains(x, y):
             self._submit()
 
-    def handle_key(self, key):
+    def handle_key(self, key: int) -> None:
         # Only one of the two is ever focused - TextInput.handle_key is a
         # no-op while unfocused, so routing the key to both is safe.
         self._username_field.handle_key(key)
@@ -98,17 +104,17 @@ class LoginScreen(Screen):
 
     # -- internal ------------------------------------------------------
 
-    def _focus_password(self, _username):
+    def _focus_password(self, _username: str) -> None:
         # Enter in the username field moves on to the password field
         # instead of submitting with whatever (possibly empty) password
         # is currently there.
         self._username_field.blur()
         self._password_field.focus()
 
-    def _on_submit(self, _password):
+    def _on_submit(self, _password: str) -> None:
         self._submit()
 
-    def _submit(self):
+    def _submit(self) -> None:
         username = self._username_field.value.strip()
         password = self._password_field.value
         if not username or not password:
@@ -116,10 +122,10 @@ class LoginScreen(Screen):
         self._error_message = None
         self._session.submit_command({"type": "login", "username": username, "password": password})
 
-    def _on_login_rejected(self, payload):
+    def _on_login_rejected(self, payload: dict) -> None:
         self._error_message = payload.get("message", "Login rejected")
 
-    def _draw_error_banner(self, canvas, message):
+    def _draw_error_banner(self, canvas: Img, message: str) -> None:
         h, w = canvas.img.shape[:2]
         text_w, text_h = canvas.text_size(message, REJECTION_FONT_SCALE, REJECTION_THICKNESS)
         bar_h = text_h + 2 * REJECTION_PADDING

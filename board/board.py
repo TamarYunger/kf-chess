@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 class Board:
     """The single in-memory board that all game logic works with: a grid of
     string tokens (e.g. 'wK', '.').
@@ -13,33 +16,33 @@ class Board:
     outside this class touches it directly.
     """
 
-    def __init__(self, rows, empty_token="."):
+    def __init__(self, rows: list[list[object]], empty_token: object = ".") -> None:
         self._cells = [list(row) for row in rows]
         self._empty_token = empty_token
         self._height = len(self._cells)
         self._width = len(self._cells[0]) if self._cells else 0
 
     @property
-    def width(self):
+    def width(self) -> int:
         return self._width
 
     @property
-    def height(self):
+    def height(self) -> int:
         return self._height
 
-    def in_bounds(self, row, col):
+    def in_bounds(self, row: int, col: int) -> bool:
         return 0 <= row < self._height and 0 <= col < self._width
 
-    def get(self, row, col):
+    def get(self, row: int, col: int) -> object:
         return self._cells[row][col]
 
-    def set(self, row, col, value):
+    def set(self, row: int, col: int, value: object) -> None:
         self._cells[row][col] = value
 
-    def is_empty(self, row, col):
+    def is_empty(self, row: int, col: int) -> bool:
         return self._cells[row][col] == self._empty_token
 
-    def snapshot(self):
+    def snapshot(self) -> list[list[object]]:
         """Return a read-only copy of the grid for rendering, so callers can
         never mutate the board through the value they get back."""
         return [row.copy() for row in self._cells]

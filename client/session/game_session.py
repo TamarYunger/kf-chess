@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from game.snapshot import GameSnapshot
 
 
 class GameSession(ABC):
@@ -18,13 +22,13 @@ class GameSession(ABC):
     """
 
     @abstractmethod
-    def submit_command(self, command):
+    def submit_command(self, command: dict | str) -> None:
         """Sends `command` (a plain dict, e.g.
         {"type": "click", "cell": (row, col)}) toward whatever is actually
         running the game - a local GameEngine or a remote server."""
 
     @abstractmethod
-    def tick(self):
+    def tick(self) -> None:
         """Does this session's own per-frame work - LocalGameSession
         advances its GameEngine's clock by the elapsed wall-clock time;
         NetworkGameSession drains its incoming-message queue and publishes
@@ -42,7 +46,7 @@ class GameSession(ABC):
         """
 
     @abstractmethod
-    def latest_snapshot(self):
+    def latest_snapshot(self) -> GameSnapshot | None:
         """Returns the most up-to-date GameSnapshot as of the last tick()
         call, or None if none is available yet (a network session before
         its first snapshot arrives; never None for a local session - see
@@ -50,7 +54,7 @@ class GameSession(ABC):
         number of times per frame, from any Screen, with no side effects.
         """
 
-    def close(self):
+    def close(self) -> None:
         """Releases whatever this session holds open (a network thread, a
         socket). A no-op by default - LocalGameSession has nothing to
         close."""

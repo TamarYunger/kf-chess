@@ -1,4 +1,7 @@
-def parse_input(lines):
+from __future__ import annotations
+
+
+def parse_input(lines: list[str]) -> tuple[list[str], list[str]]:
     """Split raw input lines into the 'Board:' and 'Commands:' sections.
 
     This handles only the command-script protocol (which lines describe the

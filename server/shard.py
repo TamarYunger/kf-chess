@@ -53,6 +53,8 @@ import logging
 import os
 import socket
 import time
+from types import ModuleType
+from typing import Callable
 
 from board.loaders import load_text_board
 from bus.event_bus import EventBus
@@ -66,7 +68,7 @@ from server.db import AccountStore, PostgresAccountStore, build_redis_client
 from server.health import start_health_server
 from server.logging_config import configure_server_logging
 from server.nats_connection import NatsConnectionProxy
-from server.protocol import ProtocolError, encode_error, parse_command
+from server.protocol import Command, ProtocolError, encode_error, parse_command
 from server.room import Room
 
 logger = logging.getLogger(__name__)
@@ -107,7 +109,7 @@ STANDARD_BOARD_TEXT = [
 ]
 
 
-def build_engine(board_lines, config=settings, events=None):
+def build_engine(board_lines: list[str], config: ModuleType = settings, events: EventBus | None = None) -> GameEngine:
     registry = build_default_registry(config)
     board = load_text_board(board_lines, registry, config)
     arbiter = RealTimeArbiter(board=board, promotion_rule=LastRankPromotion(config.PAWN_DIRECTION), config=config)
@@ -133,8 +135,15 @@ class GameShard:
     value it heartbeats/leases into Redis (see tick()).
     """
 
-    def __init__(self, nats_client, redis_client, config=settings, accounts=None, board_lines=None,
-                 instance_id=None):
+    def __init__(
+        self,
+        nats_client: object,
+        redis_client: object,
+        config: ModuleType = settings,
+        accounts: AccountStore | None = None,
+        board_lines: list[str] | None = None,
+        instance_id: str | None = None,
+    ) -> None:
         self._nats = nats_client
         self._redis = redis_client
         self._config = config
@@ -142,29 +151,29 @@ class GameShard:
         self._board_lines = board_lines or STANDARD_BOARD_TEXT
         self._colors = tuple(config.COLORS)
         self._accounts = accounts if accounts is not None else AccountStore()
-        self._rooms = {}  # room_id -> Room
-        self._proxies = {}  # connection_id -> NatsConnectionProxy (one per connection, reused)
+        self._rooms: dict[str, Room] = {}  # room_id -> Room
+        self._proxies: dict[str, NatsConnectionProxy] = {}  # connection_id -> proxy (one per connection, reused)
 
-    def _proxy_for(self, connection_id):
+    def _proxy_for(self, connection_id: str) -> NatsConnectionProxy:
         proxy = self._proxies.get(connection_id)
         if proxy is None:
             proxy = NatsConnectionProxy(self._nats, self._redis, connection_id)
             self._proxies[connection_id] = proxy
         return proxy
 
-    def _new_room(self, room_id):
+    def _new_room(self, room_id: str) -> Room:
         events = EventBus()
         engine = build_engine(self._board_lines, self._config, events=events)
         room = Room(room_id, engine, self._colors, self._accounts)
         self._rooms[room_id] = room
         return room
 
-    def metrics(self):
+    def metrics(self) -> dict:
         """Fed to server/health.py's GET /metrics by run_forever - see
         that module's own docstring for the format."""
         return {"kf_chess_shard_active_rooms": len(self._rooms)}
 
-    async def tick(self):
+    async def tick(self) -> None:
         """Advances every Room's real-time clock, then reports this
         instance's own liveness/capacity and renews every room_id lease it
         currently holds - see this module's own docstring for why both
@@ -176,7 +185,7 @@ class GameShard:
         for room_id in self._rooms:
             self._redis.setex(f"room_owner:{room_id}", PRESENCE_TTL_SECONDS, self._instance_id)
 
-    async def handle_message(self, msg):
+    async def handle_message(self, msg: object) -> None:
         """The NATS subscription callback for this instance's own inbox
         subject - one envelope per room-creation instruction, client
         command, or disconnect, forwarded here by server/ws_server.py or
@@ -197,7 +206,7 @@ class GameShard:
         except Exception:
             logger.exception("failed to handle shard inbox message")
 
-    async def _handle_create_room(self, room_id, players):
+    async def _handle_create_room(self, room_id: str, players: list[dict]) -> None:
         # server/allocator_service.py has already picked this instance and
         # reserved room_id's lease - just create the Room and seat
         # everyone (one player for ROOM CREATE, two for a Matchmaker-found
@@ -216,13 +225,13 @@ class GameShard:
         for proxy, role in proxies_and_roles:
             await room.welcome(proxy, role)
 
-    async def _handle_disconnect(self, envelope):
+    async def _handle_disconnect(self, envelope: dict) -> None:
         room = self._rooms.get(envelope["room_id"])
         proxy = self._proxies.get(envelope["connection_id"])
         if room is not None and proxy is not None:
             await room.handle_disconnect(proxy)
 
-    async def _handle_command(self, envelope):
+    async def _handle_command(self, envelope: dict) -> None:
         proxy = self._proxy_for(envelope["connection_id"])
         try:
             command = parse_command(envelope["raw"])
@@ -242,7 +251,7 @@ class GameShard:
             return
         await room.handle_command(proxy, command)
 
-    async def _handle_room_join(self, proxy, envelope, room_id):
+    async def _handle_room_join(self, proxy: NatsConnectionProxy, envelope: dict, room_id: str) -> None:
         room = self._rooms.get(room_id)
         if room is None:
             await proxy.send(json.dumps(encode_error(f"Room {room_id!r} not found")))
@@ -258,8 +267,16 @@ class GameShard:
             await room.notify_room_started(exclude=proxy)
 
 
-async def run_forever(nats_client, redis_client, config=settings, accounts=None, board_lines=None, on_ready=None,
-                       instance_id=None, health_port=HEALTH_PORT):
+async def run_forever(
+    nats_client: object,
+    redis_client: object,
+    config: ModuleType = settings,
+    accounts: AccountStore | None = None,
+    board_lines: list[str] | None = None,
+    on_ready: Callable | None = None,
+    instance_id: str | None = None,
+    health_port: int = HEALTH_PORT,
+) -> None:
     """Runs the shard until cancelled. `on_ready(shard, health_runner)` is
     called once the NATS subscription is actually active - mirrors
     server/ws_server.py's serve_forever's own on_ready, mainly so tests can

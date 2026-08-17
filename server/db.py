@@ -8,6 +8,10 @@ import hashlib
 import os
 import secrets
 import sqlite3
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import redis
 
 DEFAULT_RATING = 1200
 
@@ -17,7 +21,7 @@ DEFAULT_RATING = 1200
 PBKDF2_ITERATIONS = 100_000
 
 
-def _hash_password(password, salt_hex):
+def _hash_password(password: str, salt_hex: str) -> str:
     salt = bytes.fromhex(salt_hex)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITERATIONS)
     return digest.hex()
@@ -34,7 +38,7 @@ class AccountStore:
     matching LoginScreen's single "Login" button doing double duty.
     """
 
-    def __init__(self, path=":memory:"):
+    def __init__(self, path: str = ":memory:") -> None:
         self._conn = sqlite3.connect(path)
         self._conn.execute(
             "CREATE TABLE IF NOT EXISTS users ("
@@ -46,7 +50,7 @@ class AccountStore:
         )
         self._conn.commit()
 
-    def authenticate(self, username, password):
+    def authenticate(self, username: str, password: str) -> tuple[bool, int | None, str | None]:
         """Returns (ok, rating, error). `error` (a message meant for
         LoginScreen's rejection banner) and `rating` are mutually
         exclusive - the one not relevant to the outcome is None.
@@ -72,19 +76,19 @@ class AccountStore:
             return False, None, "Invalid password"
         return True, rating, None
 
-    def update_rating(self, username, rating):
+    def update_rating(self, username: str, rating: int) -> None:
         self._conn.execute("UPDATE users SET rating = ? WHERE username = ?", (rating, username))
         self._conn.commit()
 
-    def get_rating(self, username):
+    def get_rating(self, username: str) -> int | None:
         row = self._conn.execute("SELECT rating FROM users WHERE username = ?", (username,)).fetchone()
         return row[0] if row else None
 
-    def close(self):
+    def close(self) -> None:
         self._conn.close()
 
 
-def build_redis_client():
+def build_redis_client() -> "redis.Redis":
     """The real Redis connection main() (both server/ws_server.py's and
     server/api_gateway.py's) builds for production use - the one place
     that reads REDIS_HOST/REDIS_PORT, same reasoning as PostgresAccountStore
@@ -117,7 +121,7 @@ class PostgresAccountStore:
     INSERT - see authenticate()'s comment.
     """
 
-    def __init__(self, dsn):
+    def __init__(self, dsn: str) -> None:
         import psycopg2
 
         self._conn = psycopg2.connect(dsn)
@@ -132,7 +136,7 @@ class PostgresAccountStore:
             )
         self._conn.commit()
 
-    def authenticate(self, username, password):
+    def authenticate(self, username: str, password: str) -> tuple[bool, int | None, str | None]:
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT password_hash, salt, rating FROM users WHERE username = %s", (username,),
@@ -179,17 +183,17 @@ class PostgresAccountStore:
                 return False, None, "Invalid password"
             return True, rating, None
 
-    def update_rating(self, username, rating):
+    def update_rating(self, username: str, rating: int) -> None:
         with self._conn.cursor() as cur:
             cur.execute("UPDATE users SET rating = %s WHERE username = %s", (rating, username))
         self._conn.commit()
 
-    def get_rating(self, username):
+    def get_rating(self, username: str) -> int | None:
         with self._conn.cursor() as cur:
             cur.execute("SELECT rating FROM users WHERE username = %s", (username,))
             row = cur.fetchone()
             self._conn.commit()  # read-only - see authenticate()'s own comment on why this still matters
             return row[0] if row else None
 
-    def close(self):
+    def close(self) -> None:
         self._conn.close()

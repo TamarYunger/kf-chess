@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 from bus.event_types import NO_MATCH
 from client.view.button import Button
@@ -8,6 +9,10 @@ from client.view.graphics_renderer import GAME_OVER_DIM_ALPHA, GAME_OVER_LINE_GA
 from client.view.img import Img
 from client.view.screen_manager import Screen
 from client.view.screens.room_dialog import RoomDialog
+
+if TYPE_CHECKING:
+    from bus.event_bus import EventBus
+    from client.session.game_session import GameSession
 
 SCREEN_WIDTH = 480
 SCREEN_HEIGHT = 340
@@ -60,10 +65,10 @@ class HomeScreen(Screen):
     popup.
     """
 
-    def __init__(self, session, events):
+    def __init__(self, session: GameSession, events: EventBus) -> None:
         self._session = session
         self._events = events
-        self._searching_since = None  # wall-clock time.time(), or None if not searching
+        self._searching_since: float | None = None  # wall-clock time.time(), or None if not searching
         self._no_match = False
         self._room_dialog = RoomDialog(session)
         self._play_button = Button(
@@ -74,12 +79,12 @@ class HomeScreen(Screen):
         )
         events.subscribe(NO_MATCH, self._on_no_match)
 
-    def on_enter(self):
+    def on_enter(self) -> None:
         self._searching_since = None
         self._no_match = False
         self._room_dialog.close()
 
-    def render(self, canvas):
+    def render(self, canvas: Img) -> None:
         canvas.img = Img.create(SCREEN_WIDTH, SCREEN_HEIGHT, color=BG_COLOR).img
         text_w, _ = canvas.text_size(TITLE_TEXT, TITLE_FONT_SCALE, 2)
         canvas.put_text(TITLE_TEXT, (SCREEN_WIDTH - text_w) // 2, TITLE_Y, TITLE_FONT_SCALE, TITLE_COLOR, 2)
@@ -94,7 +99,7 @@ class HomeScreen(Screen):
 
         self._room_dialog.render(canvas)  # drawn last, on top of everything else, only if open
 
-    def handle_click(self, x, y):
+    def handle_click(self, x: int, y: int) -> None:
         if self._room_dialog.is_open:
             self._room_dialog.handle_click(x, y)
             return
@@ -105,27 +110,27 @@ class HomeScreen(Screen):
         elif self._room_button.contains(x, y):
             self._room_dialog.open()
 
-    def handle_key(self, key):
+    def handle_key(self, key: int) -> None:
         self._room_dialog.handle_key(key)
 
     # -- internal ------------------------------------------------------
 
-    def _start_search(self):
+    def _start_search(self) -> None:
         self._no_match = False
         self._searching_since = time.time()
         self._session.submit_command("PLAY")
 
-    def _on_no_match(self, payload):
+    def _on_no_match(self, payload: object) -> None:
         self._searching_since = None
         self._no_match = True
 
-    def _draw_no_match_message(self, canvas):
+    def _draw_no_match_message(self, canvas: Img) -> None:
         text_w, _ = canvas.text_size(NO_MATCH_TEXT, NO_MATCH_FONT_SCALE, 2)
         canvas.put_text(
             NO_MATCH_TEXT, (SCREEN_WIDTH - text_w) // 2, NO_MATCH_Y, NO_MATCH_FONT_SCALE, NO_MATCH_TEXT_COLOR, 2,
         )
 
-    def _draw_searching_overlay(self, canvas):
+    def _draw_searching_overlay(self, canvas: Img) -> None:
         # Mirrors GraphicsRenderer._draw_game_over_banner's own pattern -
         # dim the whole canvas, then stack centered lines of text - reusing
         # its exact color/gap constants for visual consistency.

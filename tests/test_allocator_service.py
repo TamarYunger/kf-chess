@@ -44,6 +44,25 @@ def heartbeat(redis_client, instance_id, room_count):
     redis_client.set(f"shard:heartbeat:{instance_id}", room_count)
 
 
+def register(redis_client, connection_id, instance_id="gateway-a"):
+    """Same registry entry server/ws_server.py's own _handle_auth writes -
+    needed so NatsConnectionProxy (used for the no-shard-reachable error
+    below) knows where to deliver to. Mirrors tests/test_matchmaker_service.py's
+    own helper of the same name."""
+    redis_client.set(f"connection:{connection_id}", instance_id)
+
+
+def outbox_messages_for(nats_client, connection_id):
+    messages = []
+    for subject, payload in nats_client.published:
+        if not subject.startswith("outbox."):
+            continue
+        envelope = json.loads(payload)
+        if envelope["connection_id"] == connection_id:
+            messages.append(json.loads(envelope["message"]))
+    return messages
+
+
 async def send(service, players):
     await service.handle_message(SimpleNamespace(data=json.dumps({"players": players}).encode("utf-8")))
 
@@ -89,6 +108,23 @@ def test_no_reachable_shard_drops_the_request_without_publishing():
         await send(service, [ALICE])
 
         assert nats_client.published == []
+
+    run(scenario())
+
+
+def test_no_reachable_shard_still_notifies_every_registered_requester():
+    async def scenario():
+        service, nats_client, redis_client = make_service()
+        register(redis_client, ALICE["connection_id"])
+        register(redis_client, BOB["connection_id"])
+
+        await send(service, [ALICE, BOB])
+
+        for player in (ALICE, BOB):
+            messages = outbox_messages_for(nats_client, player["connection_id"])
+            assert len(messages) == 1
+            assert messages[0]["type"] == "error"
+            assert "no game server" in messages[0]["payload"]["message"].lower()
 
     run(scenario())
 

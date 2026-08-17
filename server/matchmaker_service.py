@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import time
+from typing import Callable
 
 from server.db import build_redis_client
 from server.health import start_health_server
@@ -61,7 +62,7 @@ TICK_INTERVAL_SECONDS = 0.05
 MATCHMAKING_TIMEOUT_SECONDS = 60
 
 
-def _decode(value):
+def _decode(value: bytes | str) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
@@ -71,14 +72,14 @@ class MatchmakerService:
     `_rooms`, which is fine staying in-process since exactly one shard
     inbox reaches exactly one shard so far)."""
 
-    def __init__(self, nats_client, redis_client):
+    def __init__(self, nats_client: object, redis_client: object) -> None:
         self._nats = nats_client
         self._redis = redis_client
 
-    def _proxy_for(self, connection_id):
+    def _proxy_for(self, connection_id: str) -> NatsConnectionProxy:
         return NatsConnectionProxy(self._nats, self._redis, connection_id)
 
-    async def handle_message(self, msg):
+    async def handle_message(self, msg: object) -> None:
         """The NATS subscription callback for INBOX_SUBJECT - one envelope
         per PLAY request. Fire-and-forget delivery, same reasoning as
         server/shard.py's own handle_message: a bad envelope must not
@@ -89,7 +90,7 @@ class MatchmakerService:
         except Exception:
             logger.exception("failed to handle matchmaker inbox message")
 
-    async def _handle_play(self, envelope):
+    async def _handle_play(self, envelope: dict) -> None:
         connection_id = envelope["connection_id"]
         if self._redis.hexists(QUEUE_KEY, connection_id):
             return  # already searching - PLAY is a no-op, same guard ws_server.py used to apply
@@ -114,7 +115,7 @@ class MatchmakerService:
             ],
         }).encode("utf-8"))
 
-    async def resolve_timeouts(self):
+    async def resolve_timeouts(self) -> None:
         now = time.time()
         for connection_id, raw in list(self._redis.hgetall(QUEUE_KEY).items()):
             info = json.loads(raw)
@@ -124,13 +125,15 @@ class MatchmakerService:
                 logger.info("%s's matchmaking search timed out", info["username"])
                 await self._proxy_for(connection_id).send(json.dumps(encode_no_match()))
 
-    def metrics(self):
+    def metrics(self) -> dict:
         """Fed to server/health.py's GET /metrics by run_forever - see
         that module's own docstring for the format."""
         return {"kf_chess_matchmaker_queue_depth": self._redis.hlen(QUEUE_KEY)}
 
 
-async def run_forever(nats_client, redis_client, on_ready=None, health_port=HEALTH_PORT):
+async def run_forever(
+    nats_client: object, redis_client: object, on_ready: Callable | None = None, health_port: int = HEALTH_PORT,
+) -> None:
     """Runs the Matchmaker until cancelled. `on_ready(service, health_runner)`
     mirrors server/shard.py's own run_forever - mainly so tests can reach
     the service instance without a module-level global. `health_port=0` is

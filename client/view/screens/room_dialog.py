@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from client.view.button import FILLED, Button
 from client.view.text_input import TextInput
+
+if TYPE_CHECKING:
+    from client.session.game_session import GameSession
+    from client.view.img import Img
 
 # Assumes it's drawn within a 480x340 HOME canvas (view/screens/home_screen.py's
 # SCREEN_WIDTH/SCREEN_HEIGHT) - not imported directly to avoid a circular
@@ -55,7 +61,7 @@ class RoomDialog:
     that happens, it only closes itself once it has sent a command.
     """
 
-    def __init__(self, session):
+    def __init__(self, session: GameSession) -> None:
         self._session = session
         self.is_open = False
         self._room_id_field = TextInput(
@@ -73,16 +79,16 @@ class RoomDialog:
             font_scale=BUTTON_FONT_SCALE,
         )
 
-    def open(self):
+    def open(self) -> None:
         self.is_open = True
         self._room_id_field.clear()
         self._room_id_field.focus()
 
-    def close(self):
+    def close(self) -> None:
         self.is_open = False
         self._room_id_field.blur()
 
-    def render(self, canvas):
+    def render(self, canvas: Img) -> None:
         if not self.is_open:
             return
         canvas.rectangle((DIALOG_X, DIALOG_Y), (DIALOG_X + DIALOG_WIDTH, DIALOG_Y + DIALOG_HEIGHT), DIALOG_BG_COLOR, FILLED)
@@ -99,7 +105,7 @@ class RoomDialog:
         self._join_button.draw(canvas)
         self._cancel_button.draw(canvas)
 
-    def handle_click(self, x, y):
+    def handle_click(self, x: int, y: int) -> None:
         if not self.is_open:
             return
         if self._room_id_field.handle_click(x, y):
@@ -111,20 +117,20 @@ class RoomDialog:
         elif self._cancel_button.contains(x, y):
             self.close()
 
-    def handle_key(self, key):
+    def handle_key(self, key: int) -> None:
         if self.is_open:
             self._room_id_field.handle_key(key)  # Enter -> _on_field_submit -> _join
 
     # -- internal --------------------------------------------------------
 
-    def _on_field_submit(self, _value):
+    def _on_field_submit(self, _value: str) -> None:
         self._join()
 
-    def _create(self):
+    def _create(self) -> None:
         self._session.submit_command("ROOM CREATE")
         self.close()
 
-    def _join(self):
+    def _join(self) -> None:
         room_id = self._room_id_field.value.strip()
         if not room_id:
             return

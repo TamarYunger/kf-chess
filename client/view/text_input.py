@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from client.view.img import Img
+
 # Key codes as returned by view.img.Img.wait_key (cv2.waitKey & 0xFF).
 KEY_ENTER = (13, 10)
 KEY_BACKSPACE = (8, 127)
@@ -25,8 +30,17 @@ class TextInput:
     `render`/`handle_click`/`handle_key` on it every frame.
     """
 
-    def __init__(self, x, y, width, height, hidden=False, placeholder="",
-                 max_length=64, on_submit=None):
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        hidden: bool = False,
+        placeholder: str = "",
+        max_length: int = 64,
+        on_submit: Callable[[str], None] | None = None,
+    ) -> None:
         self.x = x
         self.y = y
         self.width = width
@@ -39,29 +53,29 @@ class TextInput:
         self._focused = False
 
     @property
-    def value(self):
+    def value(self) -> str:
         return self._value
 
     @property
-    def focused(self):
+    def focused(self) -> bool:
         return self._focused
 
-    def set_value(self, value):
+    def set_value(self, value: str) -> None:
         self._value = value[:self._max_length]
 
-    def clear(self):
+    def clear(self) -> None:
         self._value = ""
 
-    def focus(self):
+    def focus(self) -> None:
         self._focused = True
 
-    def blur(self):
+    def blur(self) -> None:
         self._focused = False
 
-    def contains(self, x, y):
+    def contains(self, x: int, y: int) -> bool:
         return self.x <= x <= self.x + self.width and self.y <= y <= self.y + self.height
 
-    def handle_click(self, x, y):
+    def handle_click(self, x: int, y: int) -> bool:
         """Focuses if `(x, y)` landed inside the box, else blurs it. Returns
         whether the click was inside, so a screen juggling several fields
         can tell whether this field claimed the click."""
@@ -72,7 +86,7 @@ class TextInput:
             self.blur()
         return inside
 
-    def handle_key(self, key):
+    def handle_key(self, key: int) -> bool:
         """Returns True if this field consumed `key` (only happens while
         focused) - a screen can use that to decide whether to also treat
         the key as its own shortcut (e.g. ESC to go back)."""
@@ -90,7 +104,7 @@ class TextInput:
             return True
         return False
 
-    def render(self, canvas):
+    def render(self, canvas: Img) -> None:
         color = BOX_COLOR_FOCUSED if self._focused else BOX_COLOR_UNFOCUSED
         canvas.rectangle((self.x, self.y), (self.x + self.width, self.y + self.height), color, BOX_THICKNESS)
 

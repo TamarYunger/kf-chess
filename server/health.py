@@ -15,20 +15,22 @@ own Phase 6 scope note for why.
 """
 from __future__ import annotations
 
+from typing import Callable
+
 from aiohttp import web
 
 
-def build_health_app(metrics_fn=None):
+def build_health_app(metrics_fn: Callable[[], dict] | None = None) -> web.Application:
     """`metrics_fn`, if given, is called fresh on every GET /metrics and
     must return a dict[str, int | float] - e.g. {"kf_chess_shard_active_rooms":
     3}. Defaults to reporting no metrics at all (bare /health only) for
     services like the Allocator that have nothing meaningful to gauge."""
     metrics_fn = metrics_fn or (lambda: {})
 
-    async def handle_health(request):
+    async def handle_health(request: web.Request) -> web.Response:
         return web.Response(text="ok")
 
-    async def handle_metrics(request):
+    async def handle_metrics(request: web.Request) -> web.Response:
         lines = [f"{name} {value}" for name, value in metrics_fn().items()]
         return web.Response(text="".join(line + "\n" for line in lines))
 
@@ -38,7 +40,7 @@ def build_health_app(metrics_fn=None):
     return app
 
 
-async def start_health_server(host, port, metrics_fn=None):
+async def start_health_server(host: str, port: int, metrics_fn: Callable[[], dict] | None = None) -> web.AppRunner:
     """Actually binds `build_health_app`'s routes to a real socket - the
     counterpart to server/api_gateway.py's own build_app()/web.run_app()
     split, just using AppRunner+TCPSite directly since these services

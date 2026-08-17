@@ -5,10 +5,14 @@ pool (a dict) and turns it into the plain sequence this expects.
 """
 from __future__ import annotations
 
+from typing import Iterable
+
 DEFAULT_RATING_RANGE = 100
 
 
-def find_opponent(rating, waiting, rating_range=DEFAULT_RATING_RANGE):
+def find_opponent(
+    rating: int, waiting: Iterable[tuple[str, int]], rating_range: int = DEFAULT_RATING_RANGE,
+) -> str | None:
     """`waiting`: a sequence of (id, rating) pairs already searching for a
     match. Returns the id of the first one within `rating_range` of
     `rating` (earliest-queued first, since callers pass `waiting` in queue

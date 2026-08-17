@@ -33,7 +33,7 @@ DEFAULT_DB_PATH = str(Path(__file__).resolve().parent / "accounts.db")
 TOKEN_TTL_SECONDS = 60
 
 
-def _default_redis_client():
+def _default_redis_client() -> object:
     """Same reasoning as server/ws_server.py's own _default_redis_client:
     an in-memory fake so this service is constructible/testable standalone,
     never required just to build the app. main() wires the real one."""
@@ -42,7 +42,7 @@ def _default_redis_client():
     return fakeredis.FakeRedis()
 
 
-def build_app(accounts=None, redis_client=None):
+def build_app(accounts: AccountStore | None = None, redis_client: object = None) -> web.Application:
     """Composition root for this one service, same shape as
     server/ws_server.py's GameServer: safe/standalone defaults (in-memory
     AccountStore, in-memory fakeredis) so this is testable without any
@@ -56,7 +56,7 @@ def build_app(accounts=None, redis_client=None):
     # that's an acceptable level of precision for a basic gauge.
     login_count = {"value": 0}
 
-    async def handle_login(request):
+    async def handle_login(request: web.Request) -> web.Response:
         try:
             body = await request.json()
             username = body["username"]
@@ -76,16 +76,16 @@ def build_app(accounts=None, redis_client=None):
         logger.info("%s logged in (rating=%s), token issued", username, rating)
         return web.json_response({"token": token, "username": username, "rating": rating})
 
-    async def handle_rooms(request):
+    async def handle_rooms(request: web.Request) -> web.Response:
         return web.json_response({"rooms": []})
 
-    async def handle_history(request):
+    async def handle_history(request: web.Request) -> web.Response:
         return web.json_response({"history": []})
 
-    async def handle_health(request):
+    async def handle_health(request: web.Request) -> web.Response:
         return web.Response(text="ok")
 
-    async def handle_metrics(request):
+    async def handle_metrics(request: web.Request) -> web.Response:
         return web.Response(text=f"kf_chess_api_gateway_logins_total {login_count['value']}\n")
 
     app = web.Application()

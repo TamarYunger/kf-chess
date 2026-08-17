@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 
-from board.piece import color_of, kind_of, make_piece
+from board.piece import Piece, color_of, kind_of, make_piece
 
 
 class WinCondition(ABC):
@@ -12,12 +14,12 @@ class WinCondition(ABC):
     """
 
     @abstractmethod
-    def is_game_over(self, captured_piece):
+    def is_game_over(self, captured_piece: Piece | None) -> bool:
         """captured_piece is the token that was just captured, or None."""
 
 
 class KingCaptureWinCondition(WinCondition):
-    def is_game_over(self, captured_piece):
+    def is_game_over(self, captured_piece: Piece | None) -> bool:
         return captured_piece is not None and kind_of(captured_piece) == "K"
 
 
@@ -25,7 +27,7 @@ class PromotionRule(ABC):
     """Decides whether/how a piece transforms after moving (Strategy pattern)."""
 
     @abstractmethod
-    def promote(self, piece, row, board_height):
+    def promote(self, piece: Piece, row: int, board_height: int) -> Piece:
         """Return the (possibly unchanged) piece token after promotion rules apply."""
 
 
@@ -40,12 +42,12 @@ class LastRankPromotion(PromotionRule):
     instead of the two silently disagreeing.
     """
 
-    def __init__(self, directions, promotable_kind="P", promote_to="Q"):
+    def __init__(self, directions: dict[str, int], promotable_kind: str = "P", promote_to: str = "Q") -> None:
         self._directions = directions
         self._promotable_kind = promotable_kind
         self._promote_to = promote_to
 
-    def promote(self, piece, row, board_height):
+    def promote(self, piece: Piece, row: int, board_height: int) -> Piece:
         color, kind = color_of(piece), kind_of(piece)
         if kind != self._promotable_kind:
             return piece

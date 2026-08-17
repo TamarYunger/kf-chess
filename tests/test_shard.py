@@ -109,7 +109,7 @@ def test_room_join_seats_the_second_connection_as_the_second_color():
         assert joiner_reply["type"] == "room"
         assert joiner_reply["payload"]["room_id"] == "room1"
         room = shard._rooms["room1"]
-        assert {room.role_of(shard._proxy_for("conn-1")), room.role_of(shard._proxy_for("conn-2"))} == \
+        assert {room._seats[shard._proxy_for("conn-1")], room._seats[shard._proxy_for("conn-2")]} == \
             set(settings.COLORS)
 
     run(scenario())
@@ -236,7 +236,7 @@ def test_disconnect_starts_the_room_grace_period():
             {"connection_id": "conn-2", "username": "bob", "rating": 1200},
         ])
         room = shard._rooms["room1"]
-        alice_color = room.role_of(shard._proxy_for("conn-1"))  # before disconnect pops the seat
+        alice_color = room._seats[shard._proxy_for("conn-1")]  # before disconnect pops the seat
 
         await send(shard, {"kind": "disconnect", "connection_id": "conn-1", "room_id": "room1"})
 
@@ -265,7 +265,7 @@ def test_room_join_reconnect_notifies_the_opponent_still_in_the_room():
             {"connection_id": "conn-2", "username": "bob", "rating": 1200},
         ])
         room = shard._rooms["room1"]
-        bob_role = room.role_of(shard._proxy_for("conn-2"))
+        bob_role = room._seats[shard._proxy_for("conn-2")]
 
         await send(shard, {"kind": "disconnect", "connection_id": "conn-2", "room_id": "room1"})
 
@@ -278,7 +278,7 @@ def test_room_join_reconnect_notifies_the_opponent_still_in_the_room():
             "room_id": None, "raw": "ROOM JOIN room1",
         })
 
-        assert room.role_of(shard._proxy_for("conn-2-reconnect")) == bob_role
+        assert room._seats[shard._proxy_for("conn-2-reconnect")] == bob_role
         reconnected_notice = [
             m for m in messages_for(nats_client, "conn-1") if m["type"] == "opponent_reconnected"
         ]

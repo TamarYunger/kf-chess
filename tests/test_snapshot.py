@@ -1,6 +1,9 @@
 from board.board import Board
+from board.piece import Piece
+from game.models import MoveRecord
 from game.snapshot import GameSnapshot
 from client.view.renderer import BoardRenderer
+from realtime.models import Arrival, Jump, Move
 
 
 def test_from_board_captures_cells_and_dimensions():
@@ -57,17 +60,24 @@ def test_from_board_defaults_motion_fields_to_empty():
 
 
 def test_from_board_carries_motion_fields_when_passed():
+    # Piece objects (real board.piece.Piece, not fake placeholders): the
+    # snapshot's own job is converting these back to plain token strings,
+    # the one boundary a Piece is documented not to cross - see
+    # game/snapshot.py's _stringify_motion.
     board = Board([["wK", "."]])
-    moves = ("fake-move",)
-    jumps = ("fake-jump",)
-    arrivals = ("fake-arrival",)
+    moves = (Move(piece=Piece.from_token("wR"), start=(0, 0), end=(0, 1), arrival=1000),)
+    jumps = (Jump(piece=Piece.from_token("bP"), cell=(1, 0), end_time=500),)
+    arrivals = (Arrival(piece=Piece.from_token("wQ"), cell=(0, 1), at=1000, kind="move"),)
     snap = GameSnapshot.from_board(
         board, game_over=False,
         moves=moves, jumps=jumps, recent_arrivals=arrivals, clock=42,
     )
-    assert snap.moves == moves
-    assert snap.jumps == jumps
-    assert snap.recent_arrivals == arrivals
+    assert len(snap.moves) == 1
+    assert snap.moves[0].piece == "wR" and snap.moves[0].start == (0, 0) and snap.moves[0].end == (0, 1)
+    assert len(snap.jumps) == 1
+    assert snap.jumps[0].piece == "bP" and snap.jumps[0].cell == (1, 0)
+    assert len(snap.recent_arrivals) == 1
+    assert snap.recent_arrivals[0].piece == "wQ" and snap.recent_arrivals[0].cell == (0, 1)
     assert snap.clock == 42
 
 
@@ -91,9 +101,11 @@ def test_from_board_defaults_move_history_to_empty_dict():
 
 def test_from_board_carries_move_history_when_passed():
     board = Board([["wK", "."]])
-    history = {"w": ("fake-record",), "b": ()}
+    history = {"w": (MoveRecord(piece=Piece.from_token("wQ"), start=(0, 0), end=(0, 1)),), "b": ()}
     snap = GameSnapshot.from_board(board, game_over=False, move_history=history)
-    assert snap.move_history == history
+    assert snap.move_history["w"][0].piece == "wQ"
+    assert snap.move_history["w"][0].start == (0, 0)
+    assert snap.move_history["b"] == ()
 
 
 def test_from_board_defaults_rejection_reason_to_none():

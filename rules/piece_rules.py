@@ -1,11 +1,18 @@
-from rules.movement_strategy import MovementStrategy
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from rules.movement_strategy import MoveContext, MovementStrategy
+
+if TYPE_CHECKING:
+    from board.board import Board
 
 
-def _shape_delta(dr, dc):
+def _shape_delta(dr: int, dc: int) -> tuple[int, int]:
     return abs(dr), abs(dc)
 
 
-def path_is_clear(board, start, end):
+def path_is_clear(board: Board, start: tuple[int, int], end: tuple[int, int]) -> bool:
     """Shared sliding-piece helper: True if every square strictly between
     start and end is empty. Used by Rook, Bishop and Queen so the check is
     written once (DRY) instead of duplicated per piece.
@@ -24,20 +31,20 @@ def path_is_clear(board, start, end):
 
 
 class KingMovement(MovementStrategy):
-    def is_legal(self, dr, dc, context):
+    def is_legal(self, dr: int, dc: int, context: MoveContext) -> bool:
         r, c = _shape_delta(dr, dc)
         return max(r, c) == 1
 
 
 class RookMovement(MovementStrategy):
-    def is_legal(self, dr, dc, context):
+    def is_legal(self, dr: int, dc: int, context: MoveContext) -> bool:
         if not ((dr == 0) != (dc == 0)):
             return False
         return path_is_clear(context.board, context.start, context.end)
 
 
 class BishopMovement(MovementStrategy):
-    def is_legal(self, dr, dc, context):
+    def is_legal(self, dr: int, dc: int, context: MoveContext) -> bool:
         r, c = _shape_delta(dr, dc)
         if not (r == c and r != 0):
             return False
@@ -45,7 +52,7 @@ class BishopMovement(MovementStrategy):
 
 
 class QueenMovement(MovementStrategy):
-    def is_legal(self, dr, dc, context):
+    def is_legal(self, dr: int, dc: int, context: MoveContext) -> bool:
         r, c = _shape_delta(dr, dc)
         straight = (dr == 0) != (dc == 0)
         diagonal = r == c and r != 0
@@ -55,7 +62,7 @@ class QueenMovement(MovementStrategy):
 
 
 class KnightMovement(MovementStrategy):
-    def is_legal(self, dr, dc, context):
+    def is_legal(self, dr: int, dc: int, context: MoveContext) -> bool:
         r, c = _shape_delta(dr, dc)
         return sorted([r, c]) == [1, 2]
 
@@ -69,10 +76,10 @@ class PawnMovement(MovementStrategy):
     board size.
     """
 
-    def __init__(self, directions):
+    def __init__(self, directions: dict[str, int]) -> None:
         self._directions = directions
 
-    def _home_row(self, direction, board):
+    def _home_row(self, direction: int, board: Board) -> int:
         """The rank a pawn may double-step from: one row in front of the
         player's back rank, not the back rank itself (pawns start on the 2nd
         rank in standard chess, not the 1st). On an 8x8 board that is row 6
@@ -80,7 +87,7 @@ class PawnMovement(MovementStrategy):
         from board height, so any board size works."""
         return 1 if direction > 0 else board.height - 2
 
-    def is_legal(self, dr, dc, context):
+    def is_legal(self, dr: int, dc: int, context: MoveContext) -> bool:
         direction = self._directions[context.color]
         start_row = self._home_row(direction, context.board)
         sr, _sc = context.start

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import ModuleType
+from typing import TYPE_CHECKING
 
-from board.piece import color_of
+from board.piece import Piece, color_of
 from realtime.models import Move, Jump, Arrival
 
+if TYPE_CHECKING:
+    from board.board import Board
+    from rules.game_conditions import PromotionRule
 
-def _straight_line_path(start, end):
+
+def _straight_line_path(start: tuple[int, int], end: tuple[int, int]) -> tuple[tuple[int, int], ...]:
     """Cells strictly after `start` up to and including `end`, walked one
     step at a time in a straight line or diagonal. Empty for any other
     shape (e.g. a knight's L) - those pieces have no intermediate squares
@@ -38,9 +44,9 @@ class ArrivalEvent:
     placed at the destination (already promoted if a promotion applied).
     """
 
-    piece: str
+    piece: Piece
     destination: tuple
-    captured: str | None
+    captured: Piece | None
 
 
 class RealTimeArbiter:
@@ -56,29 +62,29 @@ class RealTimeArbiter:
     (into the layer that owns arrival), not into the engine.
     """
 
-    def __init__(self, board, promotion_rule, config):
+    def __init__(self, board: Board, promotion_rule: PromotionRule, config: ModuleType) -> None:
         self._board = board
         self._promotion_rule = promotion_rule
         self._config = config
         self._clock = 0
-        self._active_moves = []
-        self._active_jumps = []
-        self._recent_arrivals = {}
+        self._active_moves: list[Move] = []
+        self._active_jumps: list[Jump] = []
+        self._recent_arrivals: dict[tuple[int, int], Arrival] = {}
 
     @property
-    def clock(self):
+    def clock(self) -> int:
         return self._clock
 
     @property
-    def active_moves(self):
+    def active_moves(self) -> tuple[Move, ...]:
         return tuple(self._active_moves)
 
     @property
-    def active_jumps(self):
+    def active_jumps(self) -> tuple[Jump, ...]:
         return tuple(self._active_jumps)
 
     @property
-    def recent_arrivals(self):
+    def recent_arrivals(self) -> tuple[Arrival, ...]:
         """Landings recorded for cells that still hold the piece that
         landed there - self-pruning, so a piece that moves away or gets
         captured makes its own stale entry unreadable on the next access,
@@ -88,16 +94,16 @@ class RealTimeArbiter:
             if self._board.get(*cell) == arrival.piece
         )
 
-    def has_active_motion(self):
+    def has_active_motion(self) -> bool:
         return bool(self._active_moves)
 
-    def is_moving_from(self, cell):
+    def is_moving_from(self, cell: tuple[int, int]) -> bool:
         return any(move.start == cell for move in self._active_moves)
 
-    def is_jumping_on(self, cell):
+    def is_jumping_on(self, cell: tuple[int, int]) -> bool:
         return any(jump.cell == cell for jump in self._active_jumps)
 
-    def is_resting(self, cell):
+    def is_resting(self, cell: tuple[int, int]) -> bool:
         """Whether `cell` is still within its post-landing cooldown - a
         move-landing rests for LONG_REST_DURATION, a jump-landing for
         SHORT_REST_DURATION. Reuses the same self-pruning lookup as
@@ -112,7 +118,7 @@ class RealTimeArbiter:
         )
         return self._clock < arrival.at + duration
 
-    def start_move(self, piece, start, end):
+    def start_move(self, piece: Piece, start: tuple[int, int], end: tuple[int, int]) -> None:
         """Registers a move, first checking whether its path crosses a
         same-color move already active. If it does, and this new move would
         reach the shared cell later, it is shortened to stop one cell short
@@ -141,15 +147,15 @@ class RealTimeArbiter:
 
         self._active_moves.append(Move(piece, start, actual_end, arrival, path))
 
-    def start_jump(self, piece, cell):
+    def start_jump(self, piece: Piece, cell: tuple[int, int]) -> None:
         self._active_jumps.append(Jump(piece, cell, self._clock + self._config.JUMP_DURATION))
 
-    def advance_time(self, dt):
+    def advance_time(self, dt: int) -> list[ArrivalEvent]:
         """Advance simulated time and resolve whatever became due."""
         self._clock += dt
         return self.resolve()
 
-    def resolve(self):
+    def resolve(self) -> list[ArrivalEvent]:
         """Settle any moves whose arrival time has been reached, without
         advancing the clock. Returns the arrival events produced.
 
@@ -175,13 +181,15 @@ class RealTimeArbiter:
 
     # -- internal helpers -------------------------------------------------
 
-    def _arrival_clock(self, start, end):
+    def _arrival_clock(self, start: tuple[int, int], end: tuple[int, int]) -> int:
         """A move takes MOVE_DURATION per square travelled; distance is the
         number of squares on a straight/diagonal path (Chebyshev metric)."""
         distance = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
         return self._clock + distance * self._config.MOVE_DURATION
 
-    def _shorten_for_crossings(self, piece, start_time, path):
+    def _shorten_for_crossings(
+        self, piece: Piece, start_time: int, path: tuple[tuple[int, int], ...],
+    ) -> tuple[tuple[int, int], ...]:
         """Truncates `path` right before the earliest cell where it would
         cross a same-color active move that reaches that shared cell no
         later than this new mover does - that mover keeps going, this one
@@ -205,7 +213,7 @@ class RealTimeArbiter:
                     cutoff = i
         return path if cutoff is None else path[:cutoff]
 
-    def _settle_move(self, move):
+    def _settle_move(self, move: Move) -> ArrivalEvent | None:
         if self._board.get(*move.start) != move.piece:
             # Something else already captured this piece at its own source
             # cell (e.g. a shorter enemy move landed there first, before
@@ -235,14 +243,14 @@ class RealTimeArbiter:
         self._record_arrival(piece, (r, c), kind="move")
         return ArrivalEvent(piece=piece, destination=(r, c), captured=captured)
 
-    def _is_intercepted(self, move):
+    def _is_intercepted(self, move: Move) -> bool:
         r, c = move.end
         return any(
             jump.cell == (r, c) and color_of(jump.piece) != color_of(move.piece)
             for jump in self._active_jumps
         )
 
-    def _resolve_jumps(self):
+    def _resolve_jumps(self) -> None:
         remaining = []
         for jump in self._active_jumps:
             if self._clock < jump.end_time:
@@ -251,5 +259,5 @@ class RealTimeArbiter:
                 self._record_arrival(jump.piece, jump.cell, kind="jump")
         self._active_jumps = remaining
 
-    def _record_arrival(self, piece, cell, kind):
+    def _record_arrival(self, piece: Piece, cell: tuple[int, int], kind: str) -> None:
         self._recent_arrivals[cell] = Arrival(piece=piece, cell=cell, at=self._clock, kind=kind)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 from bus.event_types import (
     CLICK, JUMP, OPPONENT_DISCONNECTED, OPPONENT_RECONNECTED, RESIGN, ROOM, ROOM_STARTED, VIEWER,
@@ -10,6 +12,11 @@ from client.view.graphics_renderer import COLOR_NAMES, GAME_OVER_DIM_ALPHA, GAME
 from client.view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
 from client.view.img import Img
 from client.view.screen_manager import Screen
+
+if TYPE_CHECKING:
+    from bus.event_bus import EventBus
+    from client.session.game_session import GameSession
+    from game.snapshot import GameSnapshot
 
 CONNECTING_TEXT = "Connecting to server..."
 CONNECTING_TEXT_COLOR = (230, 230, 230, 255)  # BGRA near-white
@@ -73,17 +80,19 @@ class GameScreen(Screen):
     distinction below are simply inert for offline play).
     """
 
-    def __init__(self, config, session, events, board_x_offset=SIDE_PANEL_WIDTH):
+    def __init__(
+        self, config: ModuleType, session: GameSession, events: EventBus, board_x_offset: int = SIDE_PANEL_WIDTH,
+    ) -> None:
         self._config = config
         self._session = session
         self._board_x_offset = board_x_offset
         self._renderer = GraphicsRenderer(config)
-        self._last_snapshot = None
-        self._disconnect_deadline = None  # wall-clock time.time(), or None if no countdown is active
-        self._room_id = None
-        self._role = None  # a color (seated) or "viewer"; None outside a room (e.g. local play)
+        self._last_snapshot: GameSnapshot | None = None
+        self._disconnect_deadline: float | None = None  # wall-clock time.time(), or None if no countdown active
+        self._room_id: str | None = None
+        self._role: str | None = None  # a color (seated) or "viewer"; None outside a room (e.g. local play)
         self._waiting_for_opponent = False  # a fresh ROOM CREATE's creator, alone until someone joins
-        self._resigned_color = None  # the color whose disconnect grace period expired, or None
+        self._resigned_color: str | None = None  # the color whose disconnect grace period expired, or None
         events.subscribe(OPPONENT_DISCONNECTED, self._on_opponent_disconnected)
         events.subscribe(OPPONENT_RECONNECTED, self._on_opponent_reconnected)
         events.subscribe(ROOM, self._on_room)
@@ -91,7 +100,7 @@ class GameScreen(Screen):
         events.subscribe(ROOM_STARTED, self._on_room_started)
         events.subscribe(RESIGN, self._on_resign)
 
-    def render(self, canvas):
+    def render(self, canvas: Img) -> None:
         # A pure read - view/app_loop.py's run_app is what calls
         # session.tick() once per frame, regardless of which screen is
         # current (see GameSession.tick's own docstring for why this
@@ -113,21 +122,21 @@ class GameScreen(Screen):
         elif self._disconnect_deadline is not None and not self._last_snapshot.game_over:
             self._draw_disconnect_overlay(canvas)
 
-    def handle_click(self, x, y):
+    def handle_click(self, x: int, y: int) -> None:
         if self._role == VIEWER or self._waiting_for_opponent:
             return  # nothing to move yet - see server/room.py's own rejection too
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
             self._session.submit_command({"type": CLICK, "cell": cell})
 
-    def handle_double_click(self, x, y):
+    def handle_double_click(self, x: int, y: int) -> None:
         if self._role == VIEWER or self._waiting_for_opponent:
             return
         cell = self._pixel_to_cell(x, y)
         if cell is not None:
             self._session.submit_command({"type": JUMP, "cell": cell})
 
-    def _pixel_to_cell(self, x, y):
+    def _pixel_to_cell(self, x: int, y: int) -> tuple[int, int] | None:
         if self._last_snapshot is None:
             return None
         cell_size = self._config.CELL_SIZE
@@ -136,7 +145,7 @@ class GameScreen(Screen):
             return row, col
         return None
 
-    def _render_connecting(self, canvas):
+    def _render_connecting(self, canvas: Img) -> None:
         cell_size = self._config.CELL_SIZE
         width = DEFAULT_BOARD_SIZE * cell_size + 2 * SIDE_PANEL_WIDTH
         height = DEFAULT_BOARD_SIZE * cell_size
@@ -149,11 +158,11 @@ class GameScreen(Screen):
 
     # -- room-id header ---------------------------------------------------
 
-    def _on_room(self, payload):
+    def _on_room(self, payload: dict) -> None:
         self._room_id = payload["room_id"]
         self._role = payload["role"]
 
-    def _draw_room_header(self, canvas):
+    def _draw_room_header(self, canvas: Img) -> None:
         text = f"Room: {self._room_id}"
         if self._role == VIEWER:
             text += " (viewing)"
@@ -161,10 +170,10 @@ class GameScreen(Screen):
 
     # -- auto-resign caption ----------------------------------------------
 
-    def _on_resign(self, payload):
+    def _on_resign(self, payload: dict) -> None:
         self._resigned_color = payload["color"]
 
-    def _draw_resign_caption(self, canvas):
+    def _draw_resign_caption(self, canvas: Img) -> None:
         name = COLOR_NAMES.get(self._resigned_color, self._resigned_color.upper())
         canvas.put_text(
             f"{name} RESIGNED", RESIGN_CAPTION_X, RESIGN_CAPTION_Y,
@@ -173,13 +182,13 @@ class GameScreen(Screen):
 
     # -- waiting for a second player to join a fresh room ----------------
 
-    def _on_waiting_for_opponent(self, payload):
+    def _on_waiting_for_opponent(self, payload: object) -> None:
         self._waiting_for_opponent = True
 
-    def _on_room_started(self, payload):
+    def _on_room_started(self, payload: object) -> None:
         self._waiting_for_opponent = False
 
-    def _draw_waiting_overlay(self, canvas):
+    def _draw_waiting_overlay(self, canvas: Img) -> None:
         h, w = canvas.img.shape[:2]
         canvas.blend_rect(0, 0, h, w, (0, 0, 0), GAME_OVER_DIM_ALPHA)
         text_w, text_h = canvas.text_size(WAITING_LINE_1, WAITING_FONT_SCALE_1, WAITING_THICKNESS)
@@ -190,13 +199,13 @@ class GameScreen(Screen):
 
     # -- opponent disconnect countdown ----------------------------------
 
-    def _on_opponent_disconnected(self, payload):
+    def _on_opponent_disconnected(self, payload: dict) -> None:
         self._disconnect_deadline = time.time() + payload["grace_period_seconds"]
 
-    def _on_opponent_reconnected(self, payload):
+    def _on_opponent_reconnected(self, payload: object) -> None:
         self._disconnect_deadline = None
 
-    def _draw_disconnect_overlay(self, canvas):
+    def _draw_disconnect_overlay(self, canvas: Img) -> None:
         # Mirrors GraphicsRenderer._draw_game_over_banner's own pattern -
         # dim the whole canvas, then stack centered lines of text - reusing
         # its exact color/gap constants for visual consistency.

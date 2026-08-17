@@ -167,7 +167,7 @@ def test_king_capture_ends_the_game():
 def test_winner_is_none_before_game_over():
     rows = [["wR", ".", "bK"], [".", ".", "."], [".", ".", "."]]
     engine, board = make_engine(rows)
-    assert engine.winner is None
+    assert engine._winner is None
 
 
 def test_winner_is_the_color_whose_piece_survived():
@@ -176,7 +176,7 @@ def test_winner_is_the_color_whose_piece_survived():
     engine.request_move((0, 0), (0, 2))  # white captures the black king
     engine.wait(2 * settings.MOVE_DURATION)
 
-    assert engine.winner == "w"
+    assert engine._winner == "w"
 
 
 def test_winner_is_black_when_white_king_is_captured():
@@ -186,7 +186,7 @@ def test_winner_is_black_when_white_king_is_captured():
     engine.wait(2 * settings.MOVE_DURATION)
 
     assert engine.game_over is True
-    assert engine.winner == "b"
+    assert engine._winner == "b"
 
 
 def test_winner_reflects_the_chronologically_first_king_capture():
@@ -200,7 +200,7 @@ def test_winner_reflects_the_chronologically_first_king_capture():
     engine.request_move((1, 2), (1, 0))  # wR -> captures bK, 2 squares
     engine.wait(3 * settings.MOVE_DURATION)
 
-    assert engine.winner == "w"
+    assert engine._winner == "w"
 
 
 def test_move_after_game_over_is_rejected():
@@ -283,7 +283,7 @@ def test_promotion_is_recorded_in_move_history():
     engine.request_move((1, 0), (0, 0))
     engine.wait(settings.MOVE_DURATION)
 
-    record = engine.move_history["w"][0]
+    record = engine._move_history.snapshot()["w"][0]
     assert record.promoted_to == "Q"
 
 
@@ -292,7 +292,7 @@ def test_non_promoting_move_has_no_promoted_to():
     engine.request_move((0, 0), (0, 2))
     engine.wait(2 * settings.MOVE_DURATION)
 
-    assert engine.move_history["w"][0].promoted_to is None
+    assert engine._move_history.snapshot()["w"][0].promoted_to is None
 
 
 def test_render_returns_current_board_text():
@@ -303,9 +303,9 @@ def test_render_returns_current_board_text():
 
 def test_clock_reflects_arbiter_time():
     engine, board = make_engine([["wR", ".", "."]])
-    assert engine.clock == 0
+    assert engine._arbiter.clock == 0
     engine.wait(settings.MOVE_DURATION)
-    assert engine.clock == settings.MOVE_DURATION
+    assert engine._arbiter.clock == settings.MOVE_DURATION
 
 
 def test_busy_source_is_rejected_while_that_piece_is_moving():
@@ -430,7 +430,7 @@ def test_snapshot_is_readonly_view_of_state():
 
 def test_move_history_starts_empty_for_every_configured_color():
     engine, board = make_engine([["wR", ".", "."]])
-    assert engine.move_history == {"w": (), "b": ()}
+    assert engine._move_history.snapshot() == {"w": (), "b": ()}
 
 
 def test_accepted_move_is_appended_to_its_color_history():
@@ -438,7 +438,7 @@ def test_accepted_move_is_appended_to_its_color_history():
     engine.request_move((0, 0), (0, 2))
     engine.request_move((2, 0), (2, 1))
 
-    history = engine.move_history
+    history = engine._move_history.snapshot()
     assert [(r.piece, r.start, r.end) for r in history["w"]] == [("wR", (0, 0), (0, 2))]
     assert [(r.piece, r.start, r.end) for r in history["b"]] == [("bR", (2, 0), (2, 1))]
 
@@ -446,7 +446,7 @@ def test_accepted_move_is_appended_to_its_color_history():
 def test_rejected_move_is_not_recorded():
     engine, board = make_engine([["wN", ".", "."], [".", ".", "."], [".", ".", "."]])
     engine.request_move((0, 0), (0, 1))  # illegal knight move
-    assert engine.move_history["w"] == ()
+    assert engine._move_history.snapshot()["w"] == ()
 
 
 def test_snapshot_carries_move_history():
@@ -458,7 +458,7 @@ def test_snapshot_carries_move_history():
 
 def test_score_starts_at_zero_for_every_configured_color():
     engine, board = make_engine([["wR", ".", "."]])
-    assert engine.score == {"w": 0, "b": 0}
+    assert dict(engine._score) == {"w": 0, "b": 0}
 
 
 def test_capturing_a_piece_awards_its_point_value_to_the_capturer():
@@ -466,7 +466,7 @@ def test_capturing_a_piece_awards_its_point_value_to_the_capturer():
     engine.request_move((0, 0), (0, 2))
     engine.wait(2 * settings.MOVE_DURATION)
 
-    assert engine.score == {"w": settings.PIECE_VALUES["N"], "b": 0}
+    assert dict(engine._score) == {"w": settings.PIECE_VALUES["N"], "b": 0}
 
 
 def test_multiple_captures_accumulate():
@@ -475,7 +475,7 @@ def test_multiple_captures_accumulate():
     engine.request_move((2, 0), (2, 1))
     engine.wait(settings.MOVE_DURATION)
 
-    assert engine.score == {"w": settings.PIECE_VALUES["P"] + settings.PIECE_VALUES["Q"], "b": 0}
+    assert dict(engine._score) == {"w": settings.PIECE_VALUES["P"] + settings.PIECE_VALUES["Q"], "b": 0}
 
 
 def test_king_capture_awards_no_score():
@@ -485,7 +485,7 @@ def test_king_capture_awards_no_score():
     engine.wait(2 * settings.MOVE_DURATION)
 
     assert engine.game_over is True
-    assert engine.score == {"w": 0, "b": 0}
+    assert dict(engine._score) == {"w": 0, "b": 0}
 
 
 def test_snapshot_carries_score():
@@ -525,7 +525,7 @@ def test_resign_ends_the_game_in_favor_of_the_other_color():
     engine.resign("w")
 
     assert engine.game_over is True
-    assert engine.winner == "b"
+    assert engine._winner == "b"
 
 
 def test_resign_publishes_resign_then_game_over():
@@ -547,13 +547,13 @@ def test_resign_after_game_over_is_a_no_op():
     engine.request_move((0, 0), (0, 2))
     engine.wait(2 * settings.MOVE_DURATION)
     assert engine.game_over is True
-    assert engine.winner == "w"
+    assert engine._winner == "w"
 
     received = []
     engine.events.subscribe("resign", lambda payload: received.append(payload))
     engine.resign("w")  # the already-declared winner "resigning" changes nothing
 
-    assert engine.winner == "w"  # unchanged
+    assert engine._winner == "w"  # unchanged
     assert received == []  # no "resign" event for a no-op
 
 
@@ -584,7 +584,7 @@ def test_accepted_move_publishes_move_log_updated():
 
     engine.request_move((0, 0), (0, 2))
 
-    assert received == [engine.move_history]
+    assert received == [engine._move_history.snapshot()]
 
 
 def test_engine_shares_an_injected_event_bus_with_other_collaborators():

@@ -17,16 +17,21 @@ import asyncio
 import json
 import logging
 import time
+from typing import TYPE_CHECKING, Callable
 
 from board.piece import color_of
 from bus.event_types import ARRIVAL, GAME_OVER, RESIGN, VIEWER
 from server.elo import update_ratings
 from server.protocol import (
-    ProtocolError, encode_arrival, encode_error, encode_game_over, encode_legal_destinations,
+    Command, ProtocolError, encode_arrival, encode_error, encode_game_over, encode_legal_destinations,
     encode_opponent_disconnected, encode_opponent_reconnected, encode_rejected, encode_resign,
     encode_room, encode_room_started, encode_snapshot, encode_waiting_for_opponent, resolve_cells,
 )
-from server.safe_send import safe_send
+from server.safe_send import Connection, safe_send
+
+if TYPE_CHECKING:
+    from game.engine import GameEngine
+    from server.db import AccountStore
 
 logger = logging.getLogger(__name__)
 
@@ -37,20 +42,20 @@ DISCONNECT_GRACE_SECONDS = 20
 
 
 class Room:
-    def __init__(self, room_id, engine, colors, accounts):
+    def __init__(self, room_id: str, engine: GameEngine, colors: tuple[str, ...], accounts: AccountStore) -> None:
         self.room_id = room_id
         self._engine = engine
         self._board_height = engine.snapshot().height
         self._colors = tuple(colors)
         self._accounts = accounts
-        self._viewers = set()  # connections watching, never seated
-        self._seats = {}  # connection -> color (currently connected AND seated)
+        self._viewers: set[Connection] = set()  # connections watching, never seated
+        self._seats: dict[Connection, str] = {}  # connection -> color (currently connected AND seated)
         # color -> {"username", "rating"} - populated once seated and kept
         # for the life of the room (even across a disconnect); both the
         # Elo update on game_over and a reconnect's reclaim check need it
         # after the original connection is long gone.
-        self._seat_info = {}
-        self._disconnected = {}  # color -> monotonic deadline (grace period pending)
+        self._seat_info: dict[str, dict] = {}
+        self._disconnected: dict[str, float] = {}  # color -> monotonic deadline (grace period pending)
         # Latches True the first time both colors are ever seated - stays
         # True even through a later disconnect (that's handle_disconnect's
         # grace-period/auto-resign job, not this). Before that first time
@@ -69,7 +74,7 @@ class Room:
         # but every engine call that can settle a motion should go through
         # _call_engine so a future addition can't forget to flush on its
         # own (see _call_engine's docstring).
-        self._pending_events = []
+        self._pending_events: list[dict] = []
         self._engine.events.subscribe(GAME_OVER, self._on_game_over)
         self._engine.events.subscribe(GAME_OVER, self._on_game_over_for_clients)
         self._engine.events.subscribe(ARRIVAL, self._on_arrival)
@@ -80,10 +85,10 @@ class Room:
         self._engine.events.subscribe(RESIGN, self._on_resign_for_clients)
 
     @property
-    def started(self):
+    def started(self) -> bool:
         return self._started
 
-    def seat_or_view(self, connection, username, rating):
+    def seat_or_view(self, connection: Connection, username: str, rating: int) -> str:
         """The single way any connection becomes part of this room -
         reused for a room's creator, a joiner, a reconnect within the
         disconnect grace period, and a matched PLAY pair (see
@@ -112,7 +117,7 @@ class Room:
         logger.info("room %s: %s joined as a viewer", self.room_id, username)
         return VIEWER
 
-    def is_reclaimable(self, username):
+    def is_reclaimable(self, username: str) -> bool:
         """True if `username` has a disconnect grace period pending on some
         color right now - checked by GameServer *before* calling
         seat_or_view, so it knows afterwards whether that call just resolved
@@ -120,26 +125,19 @@ class Room:
         or seated/viewed someone fresh."""
         return self._reclaimable_color(username) is not None
 
-    def role_of(self, connection):
-        if connection in self._seats:
-            return self._seats[connection]
-        if connection in self._viewers:
-            return VIEWER
-        return None
-
-    def _reclaimable_color(self, username):
+    def _reclaimable_color(self, username: str) -> str | None:
         for color in self._disconnected:
             if self._seat_info.get(color, {}).get("username") == username:
                 return color
         return None
 
-    def _next_open_color(self):
+    def _next_open_color(self) -> str | None:
         for color in self._colors:
             if color not in self._seat_info:
                 return color
         return None
 
-    async def welcome(self, connection, role):
+    async def welcome(self, connection: Connection, role: str) -> None:
         """Sent once, right after seat_or_view, to that connection alone -
         confirms its room/role (see view.game_screen's persistent header),
         tells it to wait if it's the room's sole occupant so far (a fresh
@@ -151,7 +149,7 @@ class Room:
             await self._safe_send(connection, json.dumps(encode_waiting_for_opponent()))
         await self._safe_send(connection, json.dumps(encode_snapshot(self._engine)))
 
-    async def notify_reconnected(self, color):
+    async def notify_reconnected(self, color: str) -> None:
         """Called by GameServer right after a seat_or_view() call that just
         reclaimed a disconnected seat (is_reclaimable was True beforehand) -
         tells everyone else in the room that color's disconnect countdown is
@@ -162,7 +160,7 @@ class Room:
         logger.info("room %s: %s reconnected, notifying room", self.room_id, color)
         await self._notify_all(encode_opponent_reconnected(color))
 
-    async def notify_room_started(self, exclude):
+    async def notify_room_started(self, exclude: Connection) -> None:
         """Called by GameServer right after a seat_or_view() call that just
         flipped `started` True for the first time (a ROOM JOIN completing
         a room a creator has been waiting alone in) - clears that waiting
@@ -175,7 +173,7 @@ class Room:
         message = json.dumps(encode_room_started())
         await asyncio.gather(*(self._safe_send(c, message) for c in connections))
 
-    async def handle_command(self, connection, command):
+    async def handle_command(self, connection: Connection, command: Command) -> None:
         """MOVE/JUMP/SELECT only - LOGIN/PLAY/ROOM are lobby-level, handled
         by GameServer before a command ever reaches a specific room. A
         viewer's attempt is rejected and logged - the client itself
@@ -197,7 +195,7 @@ class Room:
         finally:
             await self._flush_pending_events()
 
-    async def _handle_command(self, connection, command):
+    async def _handle_command(self, connection: Connection, command: Command) -> None:
         if connection not in self._seats:
             logger.warning("room %s: rejected %s from a non-seated connection", self.room_id, command.verb)
             await self._safe_send(connection, json.dumps(encode_error("Only seated players can make moves")))
@@ -255,7 +253,7 @@ class Room:
         logger.info("room %s: %s by %s accepted", self.room_id, command.verb, self._seats[connection])
         await self.broadcast()
 
-    async def _handle_select(self, connection, cell):
+    async def _handle_select(self, connection: Connection, cell: tuple[int, int]) -> None:
         """A client's first click on a piece, asking what its legal
         destinations are right now (for the highlight NetworkGameSession
         shows before its second click sends an actual MOVE) - answered with
@@ -272,7 +270,7 @@ class Room:
             destinations = frozenset()
         await self._safe_send(connection, json.dumps(encode_legal_destinations(cell, destinations)))
 
-    async def handle_disconnect(self, connection):
+    async def handle_disconnect(self, connection: Connection) -> None:
         self._viewers.discard(connection)
         color = self._seats.pop(connection, None)
         if color is None or self._engine.game_over:
@@ -282,7 +280,7 @@ class Room:
         logger.info("room %s: %s (%s) disconnected - %ss to reconnect", self.room_id, username, color, DISCONNECT_GRACE_SECONDS)
         await self._notify_all(encode_opponent_disconnected(color, DISCONNECT_GRACE_SECONDS))
 
-    async def tick(self, now):
+    async def tick(self, now: float) -> None:
         dt_ms = int((now - self._last_tick) * 1000)
         self._last_tick = now
         await self._call_engine(self._engine.wait, dt_ms)
@@ -290,7 +288,7 @@ class Room:
         await self._flush_pending_events()
         await self.broadcast()
 
-    async def _resolve_disconnect_timeouts(self, now):
+    async def _resolve_disconnect_timeouts(self, now: float) -> None:
         for color, deadline in list(self._disconnected.items()):
             if now >= deadline:
                 del self._disconnected[color]
@@ -298,7 +296,7 @@ class Room:
                 # publishes "resign" then "game_over" - see _on_game_over
                 await self._call_engine(self._engine.resign, color)
 
-    def _on_game_over(self, payload):
+    def _on_game_over(self, payload: dict) -> None:
         """Updates both seated players' Elo ratings once GameEngine reports
         the game ended - a plain (synchronous) EventBus subscriber, not a
         coroutine, since EventBus.publish calls its handlers directly (this
@@ -324,16 +322,16 @@ class Room:
             self.room_id, payload.get("winner"), info_a["username"], new_a, info_b["username"], new_b,
         )
 
-    def _on_arrival(self, event):
+    def _on_arrival(self, event: object) -> None:
         self._pending_events.append(encode_arrival(event))
 
-    def _on_game_over_for_clients(self, payload):
+    def _on_game_over_for_clients(self, payload: dict) -> None:
         self._pending_events.append(encode_game_over(payload.get("winner")))
 
-    def _on_resign_for_clients(self, payload):
+    def _on_resign_for_clients(self, payload: dict) -> None:
         self._pending_events.append(encode_resign(payload["color"]))
 
-    async def _call_engine(self, method, *args):
+    async def _call_engine(self, method: Callable, *args: object) -> object:
         """Call an engine method that may settle a pending motion (i.e.
         anything but a plain read like `snapshot()`) and immediately flush
         whatever that triggered - so flushing lives right next to the call
@@ -346,22 +344,22 @@ class Room:
         await self._flush_pending_events()
         return result
 
-    async def _flush_pending_events(self):
+    async def _flush_pending_events(self) -> None:
         pending, self._pending_events = self._pending_events, []
         for message in pending:
             await self._notify_all(message)
 
-    async def broadcast(self):
+    async def broadcast(self) -> None:
         await self._notify_all(encode_snapshot(self._engine))
 
-    async def _notify_all(self, message_dict):
+    async def _notify_all(self, message_dict: dict) -> None:
         connections = set(self._seats) | self._viewers
         if not connections:
             return
         message = json.dumps(message_dict)
         await asyncio.gather(*(self._safe_send(c, message) for c in connections))
 
-    async def _safe_send(self, connection, message):
+    async def _safe_send(self, connection: Connection, message: str) -> None:
         # A client can disconnect between being read and actually being
         # sent to - that's not this room's problem to raise about;
         # handle_disconnect is what removes it from _seats/_viewers.

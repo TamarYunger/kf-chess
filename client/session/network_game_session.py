@@ -6,6 +6,7 @@ decodes whatever it's told.
 from __future__ import annotations
 
 import dataclasses
+from typing import TYPE_CHECKING
 
 from board.notation import square_name
 from bus.event_types import CLICK, JUMP, LEGAL_DESTINATIONS, REJECTED, SNAPSHOT
@@ -13,6 +14,10 @@ from client.session.game_session import GameSession
 from client.session.login_client import AUTH_TOKEN_RECEIVED, LoginClient
 from client.session.network_client import NetworkClient
 from client.session.snapshot_codec import snapshot_from_json
+
+if TYPE_CHECKING:
+    from bus.event_bus import EventBus
+    from game.snapshot import GameSnapshot
 
 
 class NetworkGameSession(GameSession):
@@ -37,18 +42,25 @@ class NetworkGameSession(GameSession):
     submit_command below for why that needs its own branch.
     """
 
-    def __init__(self, url, events, api_gateway_url, network_client=None, login_client=None):
+    def __init__(
+        self,
+        url: str,
+        events: EventBus,
+        api_gateway_url: str,
+        network_client: NetworkClient | None = None,
+        login_client: LoginClient | None = None,
+    ) -> None:
         self._events = events
         self._client = network_client if network_client is not None else NetworkClient(url)
         self._login_client = login_client if login_client is not None else LoginClient(api_gateway_url)
-        self._snapshot = None
-        self._pending_start = None  # a cell selected by a first click, awaiting a second
-        self._legal_destinations = frozenset()  # reply to that click's own SELECT, once it arrives
-        self._rejection_reason = None
-        self._latest_snapshot = None
+        self._snapshot: GameSnapshot | None = None
+        self._pending_start: tuple[int, int] | None = None  # a cell selected by a first click, awaiting a second
+        self._legal_destinations: frozenset = frozenset()  # reply to that click's own SELECT, once it arrives
+        self._rejection_reason: str | None = None
+        self._latest_snapshot: GameSnapshot | None = None
         self._client.start()
 
-    def submit_command(self, command):
+    def submit_command(self, command: dict | str) -> None:
         if isinstance(command, str):
             self._client.send(command)
             return
@@ -69,7 +81,7 @@ class NetworkGameSession(GameSession):
             self._rejection_reason = None
             self._client.send(f"JUMP {self._square(cell)}")
 
-    def _handle_click(self, cell):
+    def _handle_click(self, cell: tuple[int, int]) -> None:
         if self._pending_start is None:
             # A first click: matches Controller.click's own behaviour -
             # clears any stale rejection banner, this is a fresh attempt.
@@ -88,10 +100,10 @@ class NetworkGameSession(GameSession):
             return  # clicking the same cell again just deselects it
         self._client.send(f"MOVE {self._square(start)} {self._square(end)}")
 
-    def _square(self, cell):
+    def _square(self, cell: tuple[int, int]) -> str:
         return square_name(cell, self._snapshot.height)
 
-    def tick(self):
+    def tick(self) -> None:
         for message in self._login_client.drain():
             if message["type"] == AUTH_TOKEN_RECEIVED:
                 # Not published on the bus - this is purely internal
@@ -121,7 +133,7 @@ class NetworkGameSession(GameSession):
                 legal_destinations=self._legal_destinations,
             )
 
-    def _apply_legal_destinations(self, payload):
+    def _apply_legal_destinations(self, payload: dict) -> None:
         # A reply to a SELECT that's since been superseded (a second click
         # already sent the MOVE, or a new SELECT for a different cell is
         # already pending) arrives here too late to matter - only apply it
@@ -130,8 +142,8 @@ class NetworkGameSession(GameSession):
             return
         self._legal_destinations = frozenset(tuple(cell) for cell in payload["destinations"])
 
-    def latest_snapshot(self):
+    def latest_snapshot(self) -> GameSnapshot | None:
         return self._latest_snapshot
 
-    def close(self):
+    def close(self) -> None:
         self._client.stop()

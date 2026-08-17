@@ -6,13 +6,13 @@ from __future__ import annotations
 K_FACTOR = 32
 
 
-def expected_score(rating_a, rating_b):
+def expected_score(rating_a: int, rating_b: int) -> float:
     """The probability the standard Elo model assigns to `a` beating `b`,
     from 0 (certain loss) to 1 (certain win) - 0.5 when ratings are equal."""
     return 1 / (1 + 10 ** ((rating_b - rating_a) / 400))
 
 
-def update_ratings(rating_a, rating_b, score_a):
+def update_ratings(rating_a: int, rating_b: int, score_a: float) -> tuple[int, int]:
     """(rating_a, rating_b, score_a) -> (new_rating_a, new_rating_b).
 
     `score_a` is the actual outcome for `a`: 1.0 for a win, 0.0 for a loss,

@@ -10,9 +10,15 @@ from __future__ import annotations
 
 import logging
 import types
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from client.view.img import Img
 from client.view.piece_assets import load_all_piece_configs, state_duration_ms
+
+if TYPE_CHECKING:
+    from client.session.game_session import GameSession
+    from client.view.screen_manager import ScreenManager
 
 WINDOW_NAME = "KungFu Chess"
 
@@ -22,7 +28,7 @@ NO_KEY = 255
 ESC_KEY = 27
 
 
-def with_synced_rest_durations(config, project_root):
+def with_synced_rest_durations(config: types.ModuleType, project_root: Path) -> types.SimpleNamespace:
     """Overrides SHORT_REST_DURATION/LONG_REST_DURATION with the real
     short_rest/long_rest sprites' own playback duration (frame_count/fps),
     so the gameplay cooldown always exactly matches how long the rest
@@ -43,7 +49,7 @@ def with_synced_rest_durations(config, project_root):
     return types.SimpleNamespace(**overrides)
 
 
-def configure_client_logging(log_path, level=logging.INFO):
+def configure_client_logging(log_path: Path, level: int = logging.INFO) -> None:
     log_path.parent.mkdir(exist_ok=True)
     logging.basicConfig(
         level=level,
@@ -52,7 +58,7 @@ def configure_client_logging(log_path, level=logging.INFO):
     )
 
 
-def run_app(session, manager, window_name=WINDOW_NAME):  # pragma: no cover
+def run_app(session: GameSession, manager: ScreenManager, window_name: str = WINDOW_NAME) -> None:  # pragma: no cover
     """Opens the window and drives the render loop until Escape, the
     window is closed, or the session is torn down - identical regardless
     of what kind of GameSession/ScreenManager it was handed.

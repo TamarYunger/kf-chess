@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import time
+from types import ModuleType
 
 from board.loaders import load_text_board
 from bus.event_bus import EventBus
@@ -16,6 +17,7 @@ from game.board_mapper import BoardMapper
 from game.controller import Controller
 from game.engine import GameEngine
 from game.presentation_stub import attach_presentation_stub
+from game.snapshot import GameSnapshot
 from realtime.real_time_arbiter import RealTimeArbiter
 from rules.game_conditions import KingCaptureWinCondition, LastRankPromotion
 from rules.rule_engine import RuleEngine
@@ -33,7 +35,7 @@ _IDENTITY_CELL_SIZE = 1
 
 
 class LocalGameSession(GameSession):
-    def __init__(self, board_lines, config, events=None):
+    def __init__(self, board_lines: list[str], config: ModuleType, events: EventBus | None = None) -> None:
         registry = build_default_registry(config)
         board = load_text_board(board_lines, registry, config)
         arbiter = RealTimeArbiter(
@@ -54,27 +56,27 @@ class LocalGameSession(GameSession):
         mapper = BoardMapper(board, _IDENTITY_CELL_SIZE)
         self._controller = Controller(engine=self._engine, board_mapper=mapper)
         self._last_tick = time.time()
-        self._latest_snapshot = None
+        self._latest_snapshot: GameSnapshot | None = None
         self._recompute_snapshot()  # available immediately, even before the first real tick()
 
-    def submit_command(self, command):
+    def submit_command(self, command: dict) -> None:
         row, col = command["cell"]
         if command["type"] == CLICK:
             self._controller.click(col, row)
         elif command["type"] == JUMP:
             self._controller.jump(col, row)
 
-    def tick(self):
+    def tick(self) -> None:
         now = time.time()
         dt_ms = int((now - self._last_tick) * 1000)
         self._last_tick = now
         self._engine.wait(dt_ms)
         self._recompute_snapshot()
 
-    def latest_snapshot(self):
+    def latest_snapshot(self) -> GameSnapshot | None:
         return self._latest_snapshot
 
-    def _recompute_snapshot(self):
+    def _recompute_snapshot(self) -> None:
         selected = self._controller.selected
         legal_destinations = (
             self._engine.legal_destinations(selected) if selected is not None else frozenset()

@@ -1,8 +1,16 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 from board.piece import color_of, kind_of
 from rules.reasons import Reason
 from rules.movement_strategy import MoveContext
+from rules.rule_registry import PieceRuleRegistry
+
+if TYPE_CHECKING:
+    from board.board import Board
 
 
 @dataclass(frozen=True)
@@ -27,11 +35,11 @@ class RuleEngine:
     are injected.
     """
 
-    def __init__(self, rule_registry, config):
+    def __init__(self, rule_registry: PieceRuleRegistry, config: ModuleType) -> None:
         self._registry = rule_registry
         self._config = config
 
-    def validate_move(self, board, start, end):
+    def validate_move(self, board: Board, start: tuple[int, int], end: tuple[int, int]) -> MoveValidation:
         if not board.in_bounds(*start) or not board.in_bounds(*end):
             return MoveValidation(False, Reason.OUTSIDE_BOARD)
         if board.is_empty(*start):

@@ -1,10 +1,21 @@
-from board.piece import color_of, kind_of
+from __future__ import annotations
+
+from types import ModuleType
+from typing import TYPE_CHECKING
+
+from board.piece import Piece, color_of, kind_of
 from bus.event_bus import EventBus
 from bus.event_types import ARRIVAL, GAME_OVER, GAME_STARTED, MOVE_ACCEPTED, RESIGN, SCORE_CHANGED
 from game.models import MoveResult
 from game.move_history import MoveHistory
 from game.snapshot import GameSnapshot
 from rules.reasons import Reason
+
+if TYPE_CHECKING:
+    from board.board import Board
+    from realtime.real_time_arbiter import ArrivalEvent, RealTimeArbiter
+    from rules.game_conditions import WinCondition
+    from rules.rule_engine import RuleEngine
 
 
 class GameEngine:
@@ -22,7 +33,15 @@ class GameEngine:
     with fakes/stubs instead of monkeypatching.
     """
 
-    def __init__(self, board, rule_engine, arbiter, win_condition, config, events=None):
+    def __init__(
+        self,
+        board: Board,
+        rule_engine: RuleEngine,
+        arbiter: RealTimeArbiter,
+        win_condition: WinCondition,
+        config: ModuleType,
+        events: EventBus | None = None,
+    ) -> None:
         self._board = board
         self._rule_engine = rule_engine
         self._arbiter = arbiter
@@ -37,7 +56,7 @@ class GameEngine:
         self._events.publish(GAME_STARTED, {"colors": tuple(config.COLORS)})
 
     @property
-    def events(self):
+    def events(self) -> EventBus:
         """The engine's EventBus, so outside code (e.g. a server broadcasting
         to clients, or the presentation-stub sound/animation placeholder in
         game.presentation_stub) can subscribe to the same events this engine
@@ -48,48 +67,24 @@ class GameEngine:
         return self._events
 
     @property
-    def game_over(self):
+    def game_over(self) -> bool:
         return self._game_over
 
-    @property
-    def move_history(self):
-        """Accepted moves so far, per color - read-only, in the order each
-        color's moves were accepted (there are no turns, so the two lists
-        advance independently)."""
-        return self._move_history.snapshot()
-
-    @property
-    def score(self):
-        """Points accumulated so far per color, from captures it made -
-        read-only. King captures earn no score (see config.PIECE_VALUES);
-        that capture already ends the game via the win condition."""
-        return dict(self._score)
-
-    @property
-    def winner(self):
-        """The color that ended the game in its favour (the other color's
-        piece was the one captured), or None while the game is still on."""
-        return self._winner
-
-    @property
-    def clock(self):
-        return self._arbiter.clock
-
-    def is_busy(self, cell):
+    def is_busy(self, cell: tuple[int, int]) -> bool:
         return (
             self._arbiter.is_moving_from(cell)
             or self._arbiter.is_jumping_on(cell)
             or self._arbiter.is_resting(cell)
         )
 
-    def can_select(self, cell):
+    def can_select(self, cell: tuple[int, int]) -> bool:
         """Whether `cell` can be picked as a move source right now."""
         self._apply_events(self._arbiter.resolve())
         if self._game_over:
             return False
         return not self.is_busy(cell) and not self._board.is_empty(*cell)
 
-    def legal_destinations(self, start):
+    def legal_destinations(self, start: tuple[int, int]) -> frozenset[tuple[int, int]]:
         """Every cell the piece at `start` could legally move to right now -
         for highlighting once it's selected. Empty once the game is over,
         or (with ALLOW_CONCURRENT_MOVES off) another move is already active
@@ -115,7 +110,7 @@ class GameEngine:
             and self._rule_engine.validate_move(self._board, start, (row, col)).is_valid
         )
 
-    def request_move(self, start, end):
+    def request_move(self, start: tuple[int, int], end: tuple[int, int]) -> MoveResult:
         self._apply_events(self._arbiter.resolve())
         if self._game_over:
             return MoveResult(False, Reason.GAME_OVER)
@@ -146,7 +141,7 @@ class GameEngine:
         self._events.publish(MOVE_ACCEPTED, {"piece": piece, "start": start, "end": end})
         return MoveResult(True, Reason.OK)
 
-    def request_jump(self, cell):
+    def request_jump(self, cell: tuple[int, int]) -> MoveResult:
         self._apply_events(self._arbiter.resolve())
         if self._game_over:
             return MoveResult(False, Reason.GAME_OVER)
@@ -160,7 +155,7 @@ class GameEngine:
         self._arbiter.start_jump(self._board.get(*cell), cell)
         return MoveResult(True, Reason.OK)
 
-    def resign(self, color):
+    def resign(self, color: str) -> None:
         """Ends the game immediately in favor of whichever color `color`
         isn't - a resignation, not a capture (see server/ws_server.py's
         disconnect-timeout auto-resign, or a future explicit "resign"
@@ -180,10 +175,10 @@ class GameEngine:
         self._events.publish(RESIGN, {"color": color})
         self._events.publish(GAME_OVER, {"winner": self._winner})
 
-    def wait(self, dt):
+    def wait(self, dt: int) -> None:
         self._apply_events(self._arbiter.advance_time(dt))
 
-    def snapshot(self):
+    def snapshot(self) -> GameSnapshot:
         return GameSnapshot.from_board(
             self._board,
             self._game_over,
@@ -192,17 +187,17 @@ class GameEngine:
             recent_arrivals=self._arbiter.recent_arrivals,
             clock=self._arbiter.clock,
             winner=self._winner,
-            move_history=self.move_history,
-            score=self.score,
+            move_history=self._move_history.snapshot(),
+            score=dict(self._score),
         )
 
-    def render(self, renderer):
+    def render(self, renderer: object) -> object:
         self._apply_events(self._arbiter.resolve())
         return renderer.render(self.snapshot())
 
     # -- internal helpers -------------------------------------------------
 
-    def _apply_events(self, events):
+    def _apply_events(self, events: list[ArrivalEvent]) -> None:
         """React to arrivals reported by the arbiter. The arbiter reports what
         was captured; the engine owns whether that ends the game (and, for a
         capture, how much it's worth to the capturing color's score).

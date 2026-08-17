@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import pathlib
+from typing import Callable
 
 import cv2
 import numpy as np
 
 class Img:
-    def __init__(self):
-        self.img = None
+    def __init__(self) -> None:
+        self.img: np.ndarray | None = None
 
     def read(self, path: str | pathlib.Path,
              size: tuple[int, int] | None = None,
@@ -53,7 +54,7 @@ class Img:
 
         return self
 
-    def draw_on(self, other_img, x, y):
+    def draw_on(self, other_img: Img, x: int, y: int) -> None:
         if self.img is None or other_img.img is None:
             raise ValueError("Both images must be loaded before drawing.")
 
@@ -79,32 +80,34 @@ class Img:
         else:
             other_img.img[y:y + h, x:x + w] = self.img
 
-    def put_text(self, txt, x, y, font_size, color=(255, 255, 255, 255), thickness=1):
+    def put_text(
+        self, txt: str, x: int, y: int, font_size: float, color: tuple = (255, 255, 255, 255), thickness: int = 1,
+    ) -> None:
         if self.img is None:
             raise ValueError("Image not loaded.")
         cv2.putText(self.img, txt, (x, y),
                     cv2.FONT_HERSHEY_SIMPLEX, font_size,
                     color, thickness, cv2.LINE_AA)
 
-    def text_size(self, txt, font_size, thickness=1):
+    def text_size(self, txt: str, font_size: float, thickness: int = 1) -> tuple[int, int]:
         """(width, height) `txt` would occupy at `font_size`/`thickness`,
         for callers that need to center or lay out text before drawing it."""
         (w, h), _ = cv2.getTextSize(txt, cv2.FONT_HERSHEY_SIMPLEX, font_size, thickness)
         return w, h
 
-    def rectangle(self, top_left, bottom_right, color, thickness):
+    def rectangle(self, top_left: tuple[int, int], bottom_right: tuple[int, int], color: tuple, thickness: int) -> None:
         if self.img is None:
             raise ValueError("Image not loaded.")
         cv2.rectangle(self.img, top_left, bottom_right, color, thickness)
 
-    def to_bgra(self):
+    def to_bgra(self) -> None:
         """Adds an opaque alpha channel in place if `self.img` is BGR."""
         if self.img is None:
             raise ValueError("Image not loaded.")
         if self.img.shape[2] == 3:
             self.img = cv2.cvtColor(self.img, cv2.COLOR_BGR2BGRA)
 
-    def blend_rect(self, top, left, bottom, right, color, alpha):
+    def blend_rect(self, top: int, left: int, bottom: int, right: int, color: tuple, alpha: float) -> None:
         """Blends `color` into the BGR channels of the [top:bottom, left:right]
         region: `region * (1 - alpha) + color * alpha`, computed by hand so
         the compositing math is ours rather than a ready-made cv2 blend."""
@@ -115,7 +118,7 @@ class Img:
         blended = region.astype(np.float32) * (1 - alpha) + overlay * alpha
         region[:] = blended.astype(region.dtype)
 
-    def blend_circle(self, cx, cy, radius, color, alpha):
+    def blend_circle(self, cx: int, cy: int, radius: int, color: tuple, alpha: float) -> None:
         """Like `blend_rect`, but only inside the circle of `radius` centered
         on (cx, cy) - the mask is our own squared-distance test, not
         `cv2.circle`, since the point is to compute the region ourselves."""
@@ -131,7 +134,7 @@ class Img:
         region[mask] = blended.astype(region.dtype)
 
     @staticmethod
-    def create(width, height, color=(0, 0, 0, 255)):
+    def create(width: int, height: int, color: tuple = (0, 0, 0, 255)) -> Img:
         """A blank canvas of `width`x`height` filled with `color` - for
         building composite layouts (e.g. side panels) that don't start from
         a file on disk."""
@@ -150,14 +153,14 @@ class Img:
     # with no window involved at all. Excluded from coverage for the same
     # reason `if __name__ == "__main__":` blocks are (see .coveragerc).
 
-    def show(self):  # pragma: no cover
+    def show(self) -> None:  # pragma: no cover
         if self.img is None:
             raise ValueError("Image not loaded.")
         cv2.imshow("Image", self.img)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
-    def show_frame(self, window_name):  # pragma: no cover
+    def show_frame(self, window_name: str) -> None:  # pragma: no cover
         """Non-blocking `imshow` for a render loop - unlike `show()`, it
         doesn't wait for a keypress or tear the window down afterwards."""
         if self.img is None:
@@ -165,11 +168,11 @@ class Img:
         cv2.imshow(window_name, self.img)
 
     @staticmethod
-    def open_window(window_name):  # pragma: no cover
+    def open_window(window_name: str) -> None:  # pragma: no cover
         cv2.namedWindow(window_name)
 
     @staticmethod
-    def set_mouse_callback(window_name, on_click=None, on_double_click=None):  # pragma: no cover
+    def set_mouse_callback(window_name: str, on_click: Callable | None = None, on_double_click: Callable | None = None) -> None:  # pragma: no cover
         """Registers `on_click(x, y)` / `on_double_click(x, y)`, translating
         cv2's raw mouse event codes so callers never need to import cv2 to
         wire up mouse handling."""
@@ -181,13 +184,13 @@ class Img:
         cv2.setMouseCallback(window_name, _handler)
 
     @staticmethod
-    def wait_key(delay_ms):  # pragma: no cover
+    def wait_key(delay_ms: int) -> int:  # pragma: no cover
         return cv2.waitKey(delay_ms) & 0xFF
 
     @staticmethod
-    def is_window_visible(window_name):  # pragma: no cover
+    def is_window_visible(window_name: str) -> bool:  # pragma: no cover
         return cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) >= 1
 
     @staticmethod
-    def close_all_windows():  # pragma: no cover
+    def close_all_windows() -> None:  # pragma: no cover
         cv2.destroyAllWindows()

@@ -29,8 +29,12 @@ one place that shape difference is bridged.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING, Callable
 
 from bus.event_types import ARRIVAL, GAME_OVER
+
+if TYPE_CHECKING:
+    from bus.event_bus import EventBus
 
 SOUNDS_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "sounds"
 
@@ -39,7 +43,9 @@ CAPTURE_SOUND = "capture.wav"
 GAME_OVER_SOUND = "game_over.wav"
 
 
-def attach_sound(events, sounds_dir=SOUNDS_DIR, play=None):
+def attach_sound(
+    events: EventBus, sounds_dir: str | Path = SOUNDS_DIR, play: Callable[[Path], None] | None = None,
+) -> None:
     """"arrival" only ever fires for a move landing, never a jump (see
     RealTimeArbiter.resolve/_resolve_jumps) - captured (see `_captured_of`)
     is None for a plain move, the captured token otherwise, the same
@@ -59,7 +65,7 @@ def attach_sound(events, sounds_dir=SOUNDS_DIR, play=None):
     events.subscribe(GAME_OVER, lambda payload: play(sounds_dir / GAME_OVER_SOUND))
 
 
-def _captured_of(payload):
+def _captured_of(payload: dict | object) -> object:
     """Offline, `payload` is GameEngine's own ArrivalEvent (attribute
     access); online, it's the same event JSON-decoded off the wire by the
     time it reaches this bus - a plain dict (see this module's own
@@ -67,7 +73,7 @@ def _captured_of(payload):
     return payload["captured"] if isinstance(payload, dict) else payload.captured
 
 
-def _play(path):  # pragma: no cover - real OS audio playback, see view/img.py's own window methods
+def _play(path: Path) -> None:  # pragma: no cover - real OS audio playback, see view/img.py's own window methods
     import winsound  # Windows-only stdlib module - imported here, not at module load,
     # so this module stays importable (and testable) on any platform; only
     # actually calling _play (Windows-only, since this game is Windows-only

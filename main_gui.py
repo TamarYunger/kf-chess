@@ -11,7 +11,11 @@ from the other's (session/game_session.py) - see GameSession's own
 docstring for why that's what lets GameScreen itself stay unaware of which
 one it's ever built with.
 """
+from __future__ import annotations
+
 from pathlib import Path
+from types import ModuleType
+from typing import TYPE_CHECKING, Callable
 
 from bus.event_bus import EventBus
 from config import settings
@@ -21,6 +25,9 @@ from client.view.game_screen import GameScreen
 from client.view.graphics_renderer import SIDE_PANEL_WIDTH
 from client.view.screen_manager import ScreenManager
 from client.view.sound import attach_sound
+
+if TYPE_CHECKING:
+    from client.session.game_session import GameSession
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CLIENT_LOG_PATH = PROJECT_ROOT / "logs" / "client.log"
@@ -37,12 +44,12 @@ STANDARD_BOARD_TEXT = [
 ]
 
 
-def build_session(events, config, board_lines=None):
+def build_session(events: EventBus, config: ModuleType, board_lines: list[str] | None = None) -> LocalGameSession:
     attach_sound(events)
     return LocalGameSession(board_lines or STANDARD_BOARD_TEXT, config, events=events)
 
 
-def build_screens(events, config, session):
+def build_screens(events: EventBus, config: ModuleType, session: GameSession) -> ScreenManager:
     """No one to log in to, let alone matchmake or room with - the board
     is the only screen this path ever shows."""
     manager = ScreenManager(events, initial="GAME")
@@ -50,7 +57,9 @@ def build_screens(events, config, session):
     return manager
 
 
-def run_gui(board_lines=None, config=settings, run_app=run_app):
+def run_gui(
+    board_lines: list[str] | None = None, config: ModuleType = settings, run_app: Callable = run_app,
+) -> None:
     # run_app is injectable (defaulting to the real window/render loop) so
     # this function's own wiring - config sync, session/screen construction
     # - stays testable with a fake in its place, without ever opening a

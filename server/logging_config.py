@@ -15,7 +15,7 @@ LOG_FILE = LOG_DIR / "server.log"
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 
-def configure_server_logging(level=logging.INFO):
+def configure_server_logging(level: int = logging.INFO) -> None:
     LOG_DIR.mkdir(exist_ok=True)
     logging.basicConfig(
         level=level,

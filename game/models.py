@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from board.piece import Kind, Piece
+
 
 @dataclass(frozen=True)
 class MoveResult:
@@ -30,7 +32,7 @@ class MoveRecord:
     matching arrival reports a different final piece.
     """
 
-    piece: str
+    piece: Piece
     start: tuple
     end: tuple
-    promoted_to: str | None = None
+    promoted_to: Kind | str | None = None

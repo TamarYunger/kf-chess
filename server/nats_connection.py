@@ -21,12 +21,12 @@ import json
 
 
 class NatsConnectionProxy:
-    def __init__(self, nats_client, redis_client, connection_id):
+    def __init__(self, nats_client: object, redis_client: object, connection_id: str) -> None:
         self._nats = nats_client
         self._redis = redis_client
         self.connection_id = connection_id
 
-    async def send(self, message):
+    async def send(self, message: str) -> None:
         instance_id = self._redis.get(f"connection:{self.connection_id}")
         if instance_id is None:
             return  # the owning Gateway instance is gone - nothing to deliver to

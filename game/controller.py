@@ -1,4 +1,13 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from rules.reasons import Reason
+
+if TYPE_CHECKING:
+    from game.board_mapper import BoardMapper
+    from game.engine import GameEngine
+    from game.models import MoveResult
 
 
 class Controller:
@@ -11,24 +20,24 @@ class Controller:
     on the engine) so the engine stays a pure application service.
     """
 
-    def __init__(self, engine, board_mapper):
+    def __init__(self, engine: GameEngine, board_mapper: BoardMapper) -> None:
         self._engine = engine
         self._mapper = board_mapper
-        self._selected = None
-        self._last_rejection = None
+        self._selected: tuple[int, int] | None = None
+        self._last_rejection: str | None = None
 
     @property
-    def selected(self):
+    def selected(self) -> tuple[int, int] | None:
         return self._selected
 
     @property
-    def last_rejection(self):
+    def last_rejection(self) -> str | None:
         """The Reason a move/jump was most recently rejected for, or None if
         the last attempted command succeeded (or nothing has been attempted
         yet) - purely UI feedback, cleared on the next successful command."""
         return self._last_rejection
 
-    def click(self, x, y):
+    def click(self, x: int, y: int) -> None:
         cell = self._mapper.pixel_to_cell(x, y)
         if cell is None:
             # Outside the board: leave selection untouched (a no-op click).
@@ -48,7 +57,7 @@ class Controller:
         result = self._engine.request_move(self._selected, cell)
         self._resolve_selection(result, cell)
 
-    def jump(self, x, y):
+    def jump(self, x: int, y: int) -> None:
         # A jump always ends any pending selection first (matches the engine's
         # historical order: selection is cleared before the jump is attempted).
         self._selected = None
@@ -58,7 +67,7 @@ class Controller:
         result = self._engine.request_jump(cell)
         self._last_rejection = None if result.is_accepted else result.reason
 
-    def _resolve_selection(self, result, cell):
+    def _resolve_selection(self, result: MoveResult, cell: tuple[int, int]) -> None:
         # Clicking another of your own pieces re-selects it (unless that piece
         # is busy). Every other second click clears the selection: the move
         # started, or the target was not a legal destination (illegal, blocked

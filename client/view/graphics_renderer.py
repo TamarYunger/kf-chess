@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 from pathlib import Path
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 from board.notation import move_notation
-from rules.reasons import Reason
 from client.view.animation import compute_piece_views
 from client.view.img import Img
 from client.view.piece_assets import load_all_piece_configs, sprite_path
+
+if TYPE_CHECKING:
+    from game.snapshot import GameSnapshot
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -40,17 +46,21 @@ REJECTION_TEXT_COLOR = (255, 255, 255, 255)  # BGRA white
 REJECTION_FONT_SCALE = 0.6
 REJECTION_THICKNESS = 2
 REJECTION_PADDING = 8
+# Plain string values, matching rules.reasons.Reason's own wire values
+# (Reason is a str Enum) - kept as bare strings rather than importing
+# Reason itself, so this Presentation-layer module has no dependency on
+# the Model layer at all (see CLAUDE.md's layering rule).
 REJECTION_MESSAGES = {
-    Reason.OUTSIDE_BOARD: "Outside the board",
-    Reason.EMPTY_SOURCE: "No piece there",
-    Reason.FRIENDLY_DESTINATION: "Your own piece is already there",
-    Reason.ILLEGAL_PIECE_MOVE: "Illegal move for that piece",
-    Reason.GAME_OVER: "The game is over",
-    Reason.BUSY_SOURCE: "That piece is already moving",
-    Reason.MOTION_IN_PROGRESS: "Another move is already in progress",
-    Reason.BUSY_CELL: "That cell is busy",
-    Reason.EMPTY_CELL: "No piece there to jump",
-    Reason.DESTINATION_CONTESTED: "Another of your pieces is already headed there",
+    "outside_board": "Outside the board",
+    "empty_source": "No piece there",
+    "friendly_destination": "Your own piece is already there",
+    "illegal_piece_move": "Illegal move for that piece",
+    "game_over": "The game is over",
+    "busy_source": "That piece is already moving",
+    "motion_in_progress": "Another move is already in progress",
+    "busy_cell": "That cell is busy",
+    "empty_cell": "No piece there to jump",
+    "destination_contested": "Another of your pieces is already headed there",
 }
 
 # Per-color move-history + score panel, one flanking each side of the
@@ -75,17 +85,17 @@ class GraphicsRenderer:
     how the text renderer is kept isolated from the model.
     """
 
-    def __init__(self, config, assets_dir=None):
+    def __init__(self, config: ModuleType, assets_dir: str | Path | None = None) -> None:
         self._config = config
         root = Path(assets_dir) if assets_dir is not None else PROJECT_ROOT / config.ASSETS_DIR
         self._pieces_root = root / "pieces"
         self._board_image_path = root / "board.png"
         self._piece_configs = load_all_piece_configs(self._pieces_root)
-        self._sprite_cache = {}
-        self._board_base = None
-        self._board_base_size = None
+        self._sprite_cache: dict[tuple, Img] = {}
+        self._board_base: Img | None = None
+        self._board_base_size: tuple[int, int] | None = None
 
-    def render(self, snapshot):
+    def render(self, snapshot: GameSnapshot) -> Img:
         canvas = self._board_canvas(snapshot.width, snapshot.height)
         if snapshot.selected is not None:
             self._draw_selection(canvas, snapshot.selected)
@@ -103,7 +113,7 @@ class GraphicsRenderer:
             self._draw_rejection_banner(canvas, message)
         return self._with_side_panels(canvas, snapshot)
 
-    def _board_canvas(self, width, height):
+    def _board_canvas(self, width: int, height: int) -> Img:
         cell = self._config.CELL_SIZE
         size = (width * cell, height * cell)
         if self._board_base is None or self._board_base_size != size:
@@ -114,7 +124,7 @@ class GraphicsRenderer:
         canvas.img = self._board_base.img.copy()
         return canvas
 
-    def _sprite(self, folder, state, frame_index):
+    def _sprite(self, folder: str, state: str, frame_index: int) -> Img:
         key = (folder, state, frame_index)
         sprite = self._sprite_cache.get(key)
         if sprite is None:
@@ -124,34 +134,34 @@ class GraphicsRenderer:
             self._sprite_cache[key] = sprite
         return sprite
 
-    def _draw_selection(self, canvas, cell):
+    def _draw_selection(self, canvas: Img, cell: tuple[int, int]) -> None:
         cell_size = self._config.CELL_SIZE
         row, col = cell
         top_left = (col * cell_size, row * cell_size)
         bottom_right = ((col + 1) * cell_size, (row + 1) * cell_size)
         canvas.rectangle(top_left, bottom_right, SELECTION_COLOR, SELECTION_THICKNESS)
 
-    def _draw_legal_destination(self, canvas, snapshot, cell):
+    def _draw_legal_destination(self, canvas: Img, snapshot: GameSnapshot, cell: tuple[int, int]) -> None:
         row, col = cell
         if snapshot.cells[row][col] == self._config.EMPTY_CELL:
             self._draw_legal_move_dot(canvas, row, col)
         else:
             self._draw_legal_capture_ring(canvas, row, col)
 
-    def _draw_legal_move_dot(self, canvas, row, col):
+    def _draw_legal_move_dot(self, canvas: Img, row: int, col: int) -> None:
         cell_size = self._config.CELL_SIZE
         radius = max(1, int(cell_size * LEGAL_MOVE_DOT_RADIUS_FRACTION))
         cx = col * cell_size + cell_size // 2
         cy = row * cell_size + cell_size // 2
         canvas.blend_circle(cx, cy, radius, LEGAL_MOVE_DOT_COLOR, LEGAL_MOVE_DOT_ALPHA)
 
-    def _draw_legal_capture_ring(self, canvas, row, col):
+    def _draw_legal_capture_ring(self, canvas: Img, row: int, col: int) -> None:
         cell_size = self._config.CELL_SIZE
         top_left = (col * cell_size, row * cell_size)
         bottom_right = ((col + 1) * cell_size, (row + 1) * cell_size)
         canvas.rectangle(top_left, bottom_right, LEGAL_CAPTURE_RING_COLOR, LEGAL_CAPTURE_RING_THICKNESS)
 
-    def _draw_rest_overlay(self, canvas, cell, rest_fraction):
+    def _draw_rest_overlay(self, canvas: Img, cell: tuple[int, int], rest_fraction: float) -> None:
         """Colors the resting piece's cell, receding from the top down as
         the cooldown counts down - full cell coloured right on landing,
         nothing left once the piece is free to act again."""
@@ -167,7 +177,7 @@ class GraphicsRenderer:
         bottom = row * cell_size + cell_size
         canvas.blend_rect(top, left, bottom, right, REST_OVERLAY_COLOR, REST_OVERLAY_MAX_ALPHA)
 
-    def _draw_game_over_banner(self, canvas, snapshot):
+    def _draw_game_over_banner(self, canvas: Img, snapshot: GameSnapshot) -> None:
         h, w = canvas.img.shape[:2]
         canvas.blend_rect(0, 0, h, w, (0, 0, 0), GAME_OVER_DIM_ALPHA)
 
@@ -188,7 +198,7 @@ class GraphicsRenderer:
             canvas.put_text(text, x, y, scale, GAME_OVER_TEXT_COLOR, thickness)
             y += GAME_OVER_LINE_GAP
 
-    def _draw_rejection_banner(self, canvas, message):
+    def _draw_rejection_banner(self, canvas: Img, message: str) -> None:
         h, w = canvas.img.shape[:2]
         text_w, text_h = canvas.text_size(message, REJECTION_FONT_SCALE, REJECTION_THICKNESS)
 
@@ -200,7 +210,7 @@ class GraphicsRenderer:
         y = h - REJECTION_PADDING - 2
         canvas.put_text(message, x, y, REJECTION_FONT_SCALE, REJECTION_TEXT_COLOR, REJECTION_THICKNESS)
 
-    def _with_side_panels(self, board_canvas, snapshot):
+    def _with_side_panels(self, board_canvas: Img, snapshot: GameSnapshot) -> Img:
         """Returns a new, wider canvas: a panel for the first color on the
         left, the board unchanged in the middle, and a panel for every
         other color on the right - a two-color game (the normal case) gets
@@ -218,7 +228,15 @@ class GraphicsRenderer:
         self._draw_color_panel(canvas, snapshot, right_colors, SIDE_PANEL_WIDTH + board_w, SIDE_PANEL_WIDTH, board_h)
         return canvas
 
-    def _draw_color_panel(self, canvas, snapshot, colors, x_offset, panel_width, panel_height):
+    def _draw_color_panel(
+        self,
+        canvas: Img,
+        snapshot: GameSnapshot,
+        colors: tuple[str, ...],
+        x_offset: int,
+        panel_width: int,
+        panel_height: int,
+    ) -> None:
         if not colors:
             return
 

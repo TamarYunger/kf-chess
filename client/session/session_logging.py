@@ -11,6 +11,7 @@ never publishes any of them.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, Callable
 
 from bus.event_types import (
     CONNECTED, CONNECTION_ERROR, DISCONNECTED, ERROR, LOGIN, LOGIN_REJECTED, NO_MATCH,
@@ -27,14 +28,17 @@ _LOGGED_EVENTS = (
     RESIGN, REJECTED, ERROR,
 )
 
+if TYPE_CHECKING:
+    from bus.event_bus import EventBus
 
-def attach_session_logging(events):
+
+def attach_session_logging(events: EventBus) -> None:
     for event_type in _LOGGED_EVENTS:
         events.subscribe(event_type, _make_logger(event_type))
 
 
-def _make_logger(event_type):
-    def handler(payload):
+def _make_logger(event_type: str) -> Callable[[object], None]:
+    def handler(payload: object) -> None:
         logger.info("%s: %r", event_type, payload)
 
     return handler

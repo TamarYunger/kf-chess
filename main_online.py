@@ -11,7 +11,11 @@ lives on its own background thread (this render loop is synchronous,
 driven by cv2.waitKey, and must never block on network I/O); see
 session/network_client.py.
 """
+from __future__ import annotations
+
 from pathlib import Path
+from types import ModuleType
+from typing import TYPE_CHECKING, Callable
 
 from bus.event_bus import EventBus
 from bus.event_types import LOGIN, ROOM
@@ -26,18 +30,21 @@ from client.view.screens.home_screen import HomeScreen
 from client.view.screens.login_screen import LoginScreen
 from client.view.sound import attach_sound
 
+if TYPE_CHECKING:
+    from client.session.game_session import GameSession
+
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_SERVER_URL = "ws://localhost:8765"
 DEFAULT_API_GATEWAY_URL = "http://localhost:8080"
 CLIENT_LOG_PATH = PROJECT_ROOT / "logs" / "client.log"
 
 
-def build_session(events, server_url, api_gateway_url):
+def build_session(events: EventBus, server_url: str, api_gateway_url: str) -> NetworkGameSession:
     attach_sound(events)
     return NetworkGameSession(server_url, events, api_gateway_url)
 
 
-def build_screens(events, config, session):
+def build_screens(events: EventBus, config: ModuleType, session: GameSession) -> ScreenManager:
     """Starts on LOGIN: a successful LOGIN moves on to HOME ("login"
     event) - it only authenticates, it doesn't put anyone in a room - and
     HOME's "Play" button (server.matchmaking) or its "Room" dialog's
@@ -55,7 +62,12 @@ def build_screens(events, config, session):
     return manager
 
 
-def run_gui(server_url=DEFAULT_SERVER_URL, api_gateway_url=DEFAULT_API_GATEWAY_URL, config=settings, run_app=run_app):
+def run_gui(
+    server_url: str = DEFAULT_SERVER_URL,
+    api_gateway_url: str = DEFAULT_API_GATEWAY_URL,
+    config: ModuleType = settings,
+    run_app: Callable = run_app,
+) -> None:
     # run_app is injectable (defaulting to the real window/render loop) so
     # this function's own wiring - config sync, session/screen construction
     # - stays testable with a fake in its place, without ever opening a

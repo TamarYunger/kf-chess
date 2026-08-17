@@ -31,7 +31,7 @@ from game.snapshot import GameSnapshot
 from realtime.models import Arrival, Jump, Move
 
 
-def snapshot_from_json(data):
+def snapshot_from_json(data: dict) -> GameSnapshot:
     return GameSnapshot(
         cells=tuple(tuple(row) for row in data["cells"]),
         width=data["width"],
@@ -53,11 +53,11 @@ def snapshot_from_json(data):
     )
 
 
-def _cell(pair):
+def _cell(pair: list[int] | None) -> tuple[int, int] | None:
     return tuple(pair) if pair is not None else None
 
 
-def _move(data):
+def _move(data: dict) -> Move:
     return Move(
         piece=data["piece"],
         start=_cell(data["start"]),
@@ -67,15 +67,15 @@ def _move(data):
     )
 
 
-def _jump(data):
+def _jump(data: dict) -> Jump:
     return Jump(piece=data["piece"], cell=_cell(data["cell"]), end_time=data["end_time"])
 
 
-def _arrival(data):
+def _arrival(data: dict) -> Arrival:
     return Arrival(piece=data["piece"], cell=_cell(data["cell"]), at=data["at"], kind=data["kind"])
 
 
-def _move_record(data):
+def _move_record(data: dict) -> MoveRecord:
     return MoveRecord(
         piece=data["piece"],
         start=_cell(data["start"]),

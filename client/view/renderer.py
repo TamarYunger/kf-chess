@@ -1,3 +1,11 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from game.snapshot import GameSnapshot
+
+
 class BoardRenderer:
     """Turns a read-only GameSnapshot into printable text.
 
@@ -6,5 +14,5 @@ class BoardRenderer:
     either one depending on the other.
     """
 
-    def render(self, snapshot):
+    def render(self, snapshot: GameSnapshot) -> str:
         return "\n".join(" ".join(row) for row in snapshot.cells)

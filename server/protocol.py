@@ -97,6 +97,7 @@ Server -> client (JSON-encoded):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Iterable
 
 from board.notation import parse_square
 from bus.event_types import (
@@ -104,6 +105,10 @@ from bus.event_types import (
     OPPONENT_DISCONNECTED, OPPONENT_RECONNECTED, REJECTED, RESIGN, ROOM, ROOM_STARTED, SNAPSHOT,
     WAITING_FOR_OPPONENT,
 )
+
+if TYPE_CHECKING:
+    from game.engine import GameEngine
+    from realtime.real_time_arbiter import ArrivalEvent
 
 _ARITY = {"MOVE": 2, "JUMP": 1, "SELECT": 1, "AUTH": 1, "PLAY": 0}
 _ROOM_SUBCOMMANDS = {"CREATE": 0, "JOIN": 1}
@@ -122,7 +127,7 @@ class Command:
     # resolve_cells
 
 
-def parse_command(line):
+def parse_command(line: str) -> Command:
     """"MOVE e2 e4" -> Command("MOVE", ("e2", "e4")). Args are left as text
     here - turning a MOVE/JUMP arg into a (row, col) needs the board's
     height, which this module doesn't have; see resolve_cells. AUTH's arg
@@ -151,7 +156,7 @@ def parse_command(line):
     return Command(verb, args)
 
 
-def _parse_room(parts):
+def _parse_room(parts: list[str]) -> Command:
     if len(parts) < 2:
         raise ProtocolError("ROOM expects CREATE or JOIN <room id>")
 
@@ -167,7 +172,7 @@ def _parse_room(parts):
     return Command(f"ROOM_{subcommand}", args)
 
 
-def resolve_cells(command, board_height):
+def resolve_cells(command: Command, board_height: int) -> tuple[tuple[int, int], ...]:
     """A MOVE/JUMP Command's raw algebraic squares -> a tuple of (row, col)
     cells. Kept separate from parse_command because it needs board_height,
     which the wire format itself has no business knowing. Not meaningful
@@ -178,7 +183,7 @@ def resolve_cells(command, board_height):
         raise ProtocolError(str(error)) from error
 
 
-def encode_snapshot(engine):
+def encode_snapshot(engine: GameEngine) -> dict:
     """The {"type": "snapshot", ...} message for the given engine's current
     state - the same JSON shape session.snapshot_codec.snapshot_from_json
     expects. Includes the arbiter's real-time motion state (moves/jumps/
@@ -237,75 +242,84 @@ def encode_snapshot(engine):
     }
 
 
-def encode_error(message):
+def encode_error(message: str) -> dict:
     return {"type": ERROR, "payload": {"message": message}}
 
 
-def encode_rejected(reason):
+def encode_rejected(reason: str) -> dict:
     # Reason subclasses str (see rules.reasons), so it serializes as its
     # plain value ("busy_source") once json.dumps'd - not str(reason),
     # which would instead give Enum's own "Reason.BUSY_SOURCE".
     return {"type": REJECTED, "payload": {"reason": reason}}
 
 
-def encode_login(username, rating):
+def encode_login(username: str, rating: int) -> dict:
     return {"type": LOGIN, "payload": {"username": username, "rating": rating}}
 
 
-def encode_login_rejected(message):
+def encode_login_rejected(message: str) -> dict:
     return {"type": LOGIN_REJECTED, "payload": {"message": message}}
 
 
-def encode_room(room_id, role):
+def encode_room(room_id: str, role: str) -> dict:
     return {"type": ROOM, "payload": {"room_id": room_id, "role": role}}
 
 
-def encode_no_match():
+def encode_no_match() -> dict:
     return {"type": NO_MATCH, "payload": None}
 
 
-def encode_opponent_disconnected(color, grace_period_seconds):
+def encode_opponent_disconnected(color: str, grace_period_seconds: int) -> dict:
     return {
         "type": OPPONENT_DISCONNECTED,
         "payload": {"color": color, "grace_period_seconds": grace_period_seconds},
     }
 
 
-def encode_opponent_reconnected(color):
+def encode_opponent_reconnected(color: str) -> dict:
     return {"type": OPPONENT_RECONNECTED, "payload": {"color": color}}
 
 
-def encode_legal_destinations(start, destinations):
+def encode_legal_destinations(start: tuple[int, int], destinations: Iterable[tuple[int, int]]) -> dict:
     return {
         "type": LEGAL_DESTINATIONS,
         "payload": {"start": list(start), "destinations": [list(cell) for cell in sorted(destinations)]},
     }
 
 
-def encode_waiting_for_opponent():
+def encode_waiting_for_opponent() -> dict:
     # Sent once, right after a ROOM CREATE, only to the creator, and only
     # if no one else is seated yet - PLAY's matchmaking always seats both
     # sides at once, so a PLAY-matched room never sends this.
     return {"type": WAITING_FOR_OPPONENT, "payload": None}
 
 
-def encode_room_started():
+def encode_room_started() -> dict:
     # Broadcast once, exactly when a room's second seat is filled for the
     # first time - clears whatever "waiting" state the creator's client
     # is showing.
     return {"type": ROOM_STARTED, "payload": None}
 
 
-def encode_arrival(event):
+def encode_arrival(event: ArrivalEvent) -> dict:
+    # event.piece/.captured are a real board.piece.Piece (a dataclass, not
+    # JSON-serializable) whenever the room's board came from a loader -
+    # str() converts back to the plain token, same boundary conversion
+    # game/snapshot.py does for a full snapshot (this event bypasses that
+    # and goes straight from the bus to the wire, so it needs its own).
     return {
         "type": ARRIVAL,
-        "payload": {"piece": event.piece, "destination": list(event.destination), "captured": event.captured},
+        "payload": {
+            "piece": str(event.piece),
+            "destination": list(event.destination),
+            "captured": str(event.captured) if event.captured is not None else None,
+        },
     }
 
 
-def encode_game_over(winner):
+def encode_game_over(winner: str | None) -> dict:
     return {"type": GAME_OVER, "payload": {"winner": winner}}
 
 
-def encode_resign(color):
+def encode_resign(color: str) -> dict:
     return {"type": RESIGN, "payload": {"color": color}}

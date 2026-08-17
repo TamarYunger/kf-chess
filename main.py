@@ -2,7 +2,11 @@
 
 Repository: https://github.com/TamarYunger/kf-chess
 """
+from __future__ import annotations
+
 import sys
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 from config import settings
 from rules.rule_registry import build_default_registry
@@ -18,8 +22,12 @@ from game.controller import Controller
 from game.presentation_stub import attach_presentation_stub
 from client.view.renderer import BoardRenderer
 
+if TYPE_CHECKING:
+    from game.controller import Controller
+    from game.engine import GameEngine
 
-def run(input_lines, config=settings):
+
+def run(input_lines: list[str], config: ModuleType = settings) -> None:
     """Parse input and execute all commands. `config` is injectable so
     tests (or custom variants) can supply alternate settings without
     monkeypatching the settings module.
@@ -61,7 +69,7 @@ def run(input_lines, config=settings):
         _dispatch(command, engine, controller, renderer)
 
 
-def _dispatch(command, engine, controller, renderer):
+def _dispatch(command: str, engine: GameEngine, controller: Controller, renderer: BoardRenderer) -> None:
     parts = command.split()
     if not parts:
         return
@@ -77,7 +85,7 @@ def _dispatch(command, engine, controller, renderer):
         print(engine.render(renderer))
 
 
-def main(input_stream=None):
+def main(input_stream: object = None) -> None:
     """Read a script and run it. `input_stream` is injectable so tests can
     supply a file-like object instead of monkeypatching sys.stdin; it defaults
     to real stdin.

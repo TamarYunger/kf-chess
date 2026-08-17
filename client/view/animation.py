@@ -1,14 +1,23 @@
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass
+from types import ModuleType
+from typing import TYPE_CHECKING
 
-from client.view.piece_assets import token_to_folder, state_duration_ms
+from client.view.piece_assets import StateConfig, token_to_folder, state_duration_ms
+
+if TYPE_CHECKING:
+    from game.snapshot import GameSnapshot
 
 # How high a jumping piece lifts off its cell at the peak of its arc,
 # as a fraction of one cell's height.
 JUMP_HEIGHT_FRACTION = 0.35
 
 
-def resolve_state_chain(state_configs, start_state, elapsed_ms):
+def resolve_state_chain(
+    state_configs: dict[str, StateConfig], start_state: str, elapsed_ms: float,
+) -> tuple[str, float]:
     """Walks the next_state_when_finished chain starting at `start_state`,
     consuming `elapsed_ms` as it goes, until it either reaches a terminal
     state or elapsed_ms runs out mid-state. Returns
@@ -40,7 +49,7 @@ def resolve_state_chain(state_configs, start_state, elapsed_ms):
         state = cfg.next_state
 
 
-def frame_index_for(cfg, ms_into_state):
+def frame_index_for(cfg: StateConfig, ms_into_state: float) -> int:
     """Looping states wrap around; non-looping states freeze on their last
     frame once the sprite's own playback duration has elapsed (independent
     of how long the underlying game motion actually takes)."""
@@ -52,7 +61,7 @@ def frame_index_for(cfg, ms_into_state):
     return min(raw, cfg.frame_count - 1)
 
 
-def jump_height_offset(t, cell_size):
+def jump_height_offset(t: float, cell_size: int) -> float:
     """Vertical lift (negative = up) for a jump in progress: 0 at takeoff
     and landing, peaking at JUMP_HEIGHT_FRACTION of a cell halfway through
     - a sine arc, not a straight up-and-back-down snap."""
@@ -60,7 +69,14 @@ def jump_height_offset(t, cell_size):
     return -math.sin(math.pi * t) * JUMP_HEIGHT_FRACTION * cell_size
 
 
-def interpolate_position(start_cell, end_cell, start_time, arrival, clock, cell_size):
+def interpolate_position(
+    start_cell: tuple[int, int],
+    end_cell: tuple[int, int],
+    start_time: float,
+    arrival: float,
+    clock: float,
+    cell_size: int,
+) -> tuple[float, float]:
     if arrival <= start_time:
         t = 1.0
     else:
@@ -86,7 +102,7 @@ class PieceView:
     rest_fraction: float | None = None  # 1.0 = just landed, 0.0 = cooldown over; None if not resting
 
 
-def rest_fraction_remaining(elapsed_ms, rest_duration_ms):
+def rest_fraction_remaining(elapsed_ms: float, rest_duration_ms: float) -> float:
     """1.0 right when a piece lands, decreasing to 0.0 once its post-landing
     cooldown (config.SHORT_REST_DURATION / LONG_REST_DURATION) has fully
     elapsed - drives the cooldown overlay drawn on a resting piece's cell."""
@@ -95,7 +111,9 @@ def rest_fraction_remaining(elapsed_ms, rest_duration_ms):
     return max(0.0, min(1.0, 1.0 - elapsed_ms / rest_duration_ms))
 
 
-def compute_piece_views(snapshot, piece_configs, config):
+def compute_piece_views(
+    snapshot: GameSnapshot, piece_configs: dict[str, dict[str, StateConfig]], config: ModuleType,
+) -> list[PieceView]:
     """Derives, for every occupied cell in the snapshot, which animation
     frame to draw and at what pixel position - purely from timestamps
     (the active moves/jumps and recent landings already on the snapshot),

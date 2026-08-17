@@ -22,14 +22,14 @@ AUTH_TOKEN_RECEIVED = "auth_token_received"
 
 
 class LoginClient:
-    def __init__(self, api_gateway_url, incoming=None):
+    def __init__(self, api_gateway_url: str, incoming: queue.Queue | None = None) -> None:
         self._login_url = api_gateway_url.rstrip("/") + "/login"
         self.incoming = incoming if incoming is not None else queue.Queue()
 
-    def login(self, username, password):
+    def login(self, username: str, password: str) -> None:
         threading.Thread(target=self._login, args=(username, password), daemon=True).start()
 
-    def _login(self, username, password):
+    def _login(self, username: str, password: str) -> None:
         body = json.dumps({"username": username, "password": password}).encode("utf-8")
         request = urllib.request.Request(
             self._login_url, data=body, headers={"Content-Type": "application/json"}, method="POST",
@@ -44,7 +44,7 @@ class LoginClient:
         except (urllib.error.URLError, OSError) as error:
             self.incoming.put({"type": LOGIN_REJECTED, "payload": {"message": str(error)}})
 
-    def drain(self):
+    def drain(self) -> list[dict]:
         """Pops every message currently queued, without blocking - for
         NetworkGameSession.tick() to call once per frame, same contract as
         NetworkClient.drain()."""

@@ -1,11 +1,20 @@
+from __future__ import annotations
+
+from types import ModuleType
+from typing import TYPE_CHECKING
+
 from board.board import Board
+from board.piece import Piece
+
+if TYPE_CHECKING:
+    from rules.rule_registry import PieceRuleRegistry
 
 
 class BoardParseError(Exception):
     """Raised when external board input is malformed for its format."""
 
 
-def _valid_text_tokens(registry, colors, empty_token):
+def _valid_text_tokens(registry: PieceRuleRegistry, colors: tuple[str, ...], empty_token: str) -> set[str]:
     """Valid tokens are derived from whatever piece kinds are registered,
     rather than a hardcoded string - so registering a custom piece kind
     automatically makes its token accepted here too.
@@ -17,7 +26,7 @@ def _valid_text_tokens(registry, colors, empty_token):
     return tokens
 
 
-def load_text_board(rows, registry, config):
+def load_text_board(rows: list[str], registry: PieceRuleRegistry, config: ModuleType) -> Board:
     """Adapter that converts text board rows into the internal Board.
 
     This is the text-format seam. To support another input format (e.g. a
@@ -41,5 +50,5 @@ def load_text_board(rows, registry, config):
         for token in tokens:
             if token not in valid_tokens:
                 raise BoardParseError("UNKNOWN_TOKEN")
-        grid.append(tokens)
+        grid.append([token if token == config.EMPTY_CELL else Piece.from_token(token) for token in tokens])
     return Board(grid, empty_token=config.EMPTY_CELL)

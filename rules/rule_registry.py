@@ -1,3 +1,10 @@
+from __future__ import annotations
+
+from types import ModuleType
+
+from rules.movement_strategy import MovementStrategy
+
+
 class UnknownPieceKindError(Exception):
     pass
 
@@ -12,23 +19,23 @@ class PieceRuleRegistry:
     valid board token (see game.parser).
     """
 
-    def __init__(self):
-        self._strategies = {}
+    def __init__(self) -> None:
+        self._strategies: dict[str, MovementStrategy] = {}
 
-    def register(self, kind, strategy):
+    def register(self, kind: str, strategy: MovementStrategy) -> None:
         self._strategies[kind] = strategy
 
-    def get(self, kind):
+    def get(self, kind: str) -> MovementStrategy:
         try:
             return self._strategies[kind]
         except KeyError:
             raise UnknownPieceKindError(kind) from None
 
-    def registered_kinds(self):
+    def registered_kinds(self) -> tuple[str, ...]:
         return tuple(self._strategies.keys())
 
 
-def build_default_registry(config):
+def build_default_registry(config: ModuleType) -> PieceRuleRegistry:
     """Factory for the standard chess piece set.
 
     Kept separate from PieceRuleRegistry itself so alternate registries

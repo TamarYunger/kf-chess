@@ -423,7 +423,7 @@ def test_login_flow_and_rating_update_through_the_full_stack(tmp_path):
                     return room_engine.game_over and accounts.get_rating("alice") != 1200
 
                 assert await _wait_until(game_finished_and_rated, timeout=8.0)
-                if alice_color == room_engine.winner:
+                if alice_color == room_engine._winner:
                     assert accounts.get_rating("alice") > 1200  # alice won
                     assert accounts.get_rating("bob") < 1200
                 else:
@@ -506,7 +506,7 @@ def test_matchmaking_real_disconnect_shows_countdown_then_auto_resigns():
                     return screen_a._last_snapshot.game_over
 
                 assert await _wait_until(alice_sees_game_over)
-                assert room._engine.winner == alice_color
+                assert room._engine._winner == alice_color
                 # The real wire round-trip for the "resign" broadcast added
                 # alongside "game_over" (server/protocol.py's encode_resign) -
                 # tells alice's client *why* the game ended, not just that it did.

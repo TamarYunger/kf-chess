@@ -36,10 +36,13 @@ import logging
 import os
 import random
 import secrets
+from typing import Callable
 
 from server.db import build_redis_client
 from server.health import start_health_server
 from server.logging_config import configure_server_logging
+from server.nats_connection import NatsConnectionProxy
+from server.protocol import encode_error
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +66,19 @@ SHARD_INBOX_SUBJECT_TEMPLATE = "shard.inbox.{instance_id}"
 PRESENCE_TTL_SECONDS = 10
 
 
-def _decode(value):
+def _decode(value: bytes | str) -> str:
     return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
 class AllocatorService:
-    def __init__(self, nats_client, redis_client):
+    def __init__(self, nats_client: object, redis_client: object) -> None:
         self._nats = nats_client
         self._redis = redis_client
 
-    def _pick_shard_instance(self):
+    def _proxy_for(self, connection_id: str) -> NatsConnectionProxy:
+        return NatsConnectionProxy(self._nats, self._redis, connection_id)
+
+    def _pick_shard_instance(self) -> str | None:
         """Power-of-two-choices over every Shard currently heartbeating -
         see this module's own docstring. Returns None if no Shard is
         reachable at all (nothing heartbeating in Redis right now)."""
@@ -88,7 +94,7 @@ class AllocatorService:
         loads.sort(key=lambda pair: pair[0])
         return loads[0][1]
 
-    async def handle_message(self, msg):
+    async def handle_message(self, msg: object) -> None:
         """The NATS subscription callback for INBOX_SUBJECT - one envelope
         per need_room request. Fire-and-forget delivery, same reasoning as
         server/shard.py's own handle_message: a bad envelope must not
@@ -99,16 +105,21 @@ class AllocatorService:
         except Exception:
             logger.exception("failed to handle allocator inbox message")
 
-    async def _handle_need_room(self, players):
+    async def _handle_need_room(self, players: list[dict]) -> None:
         instance_id = self._pick_shard_instance()
         if instance_id is None:
             # No Shard is currently reachable at all - nothing sensible to
             # allocate to. This can't happen in the deployed topology
             # (docker-compose.yml's ws-server/matchmaker both depend_on
-            # game-shard), so this just logs rather than inventing a
-            # client-facing error path for a case that shouldn't occur.
+            # game-shard), but the player(s) who asked for a room still
+            # need to hear *something* instead of waiting forever with no
+            # signal at all - same reasoning as server/matchmaker_service.py's
+            # own timeout path back through NatsConnectionProxy.
             logger.warning("no Game Server Shard is reachable - dropping a room request for %s",
                             [player["username"] for player in players])
+            message = json.dumps(encode_error("No game server available right now - please try again"))
+            for player in players:
+                await self._proxy_for(player["connection_id"]).send(message)
             return
 
         room_id = secrets.token_hex(3)
@@ -122,7 +133,9 @@ class AllocatorService:
         }).encode("utf-8"))
 
 
-async def run_forever(nats_client, redis_client, on_ready=None, health_port=HEALTH_PORT):
+async def run_forever(
+    nats_client: object, redis_client: object, on_ready: Callable | None = None, health_port: int = HEALTH_PORT,
+) -> None:
     """Runs the Allocator until cancelled. `on_ready(service, health_runner)`
     mirrors server/shard.py's own run_forever - mainly so tests can reach
     the service instance without a module-level global. No periodic work

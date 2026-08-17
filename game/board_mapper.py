@@ -1,3 +1,11 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from board.board import Board
+
+
 class BoardMapper:
     """Translates pixel coordinates into board cells (Coordinate Adapter).
 
@@ -11,13 +19,13 @@ class BoardMapper:
     itself. They default to 0 for callers with nothing else on-screen.
     """
 
-    def __init__(self, board, cell_size, x_offset=0, y_offset=0):
+    def __init__(self, board: Board, cell_size: int, x_offset: int = 0, y_offset: int = 0) -> None:
         self._board = board
         self._cell_size = cell_size
         self._x_offset = x_offset
         self._y_offset = y_offset
 
-    def pixel_to_cell(self, x, y):
+    def pixel_to_cell(self, x: int, y: int) -> tuple[int, int] | None:
         row = (y - self._y_offset) // self._cell_size
         col = (x - self._x_offset) // self._cell_size
         if not self._board.in_bounds(row, col):

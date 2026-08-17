@@ -1,6 +1,42 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, TypeVar
+
+from board.piece import kind_to_str
+
+if TYPE_CHECKING:
+    from board.board import Board
+    from game.models import MoveRecord
+    from realtime.models import Arrival, Jump, Move
+
+_Motion = TypeVar("_Motion", "Move", "Jump", "Arrival")
+
+
+def _stringify_motion(items: tuple[_Motion, ...]) -> tuple[_Motion, ...]:
+    """Move/Jump/Arrival all carry a `piece` field - a real Piece object
+    once the board came from a loader (see board/loaders.py) - converted
+    back to a plain token string here, at the one boundary GameSnapshot
+    is documented to be (the renderer "never receives the live Board or
+    Piece objects"). Works unchanged on a plain string `piece` too (a
+    directly-constructed test board bypassing the loader), since str() on
+    an already-plain string is a no-op."""
+    return tuple(dataclasses.replace(item, piece=str(item.piece)) for item in items)
+
+
+def _stringify_move_history(
+    move_history: dict[str, tuple[MoveRecord, ...]],
+) -> dict[str, tuple[MoveRecord, ...]]:
+    return {
+        color: tuple(
+            dataclasses.replace(
+                record, piece=str(record.piece), promoted_to=kind_to_str(record.promoted_to),
+            )
+            for record in records
+        )
+        for color, records in move_history.items()
+    }
 
 
 @dataclass(frozen=True)
@@ -57,10 +93,22 @@ class GameSnapshot:
     score: dict = field(default_factory=dict)
 
     @classmethod
-    def from_board(cls, board, game_over, selected=None, moves=(), jumps=(),
-                    recent_arrivals=(), clock=0, winner=None, move_history=None,
-                    score=None, rejection_reason=None, legal_destinations=None):
-        cells = tuple(tuple(row) for row in board.snapshot())
+    def from_board(
+        cls,
+        board: Board,
+        game_over: bool,
+        selected: tuple[int, int] | None = None,
+        moves: tuple[Move, ...] = (),
+        jumps: tuple[Jump, ...] = (),
+        recent_arrivals: tuple[Arrival, ...] = (),
+        clock: int = 0,
+        winner: str | None = None,
+        move_history: dict[str, tuple[MoveRecord, ...]] | None = None,
+        score: dict[str, int] | None = None,
+        rejection_reason: str | None = None,
+        legal_destinations: frozenset[tuple[int, int]] | None = None,
+    ) -> GameSnapshot:
+        cells = tuple(tuple(str(cell) for cell in row) for row in board.snapshot())
         return cls(
             cells=cells,
             width=board.width,
@@ -69,11 +117,11 @@ class GameSnapshot:
             selected=selected,
             rejection_reason=rejection_reason,
             legal_destinations=legal_destinations or frozenset(),
-            moves=moves,
-            jumps=jumps,
-            recent_arrivals=recent_arrivals,
+            moves=_stringify_motion(moves),
+            jumps=_stringify_motion(jumps),
+            recent_arrivals=_stringify_motion(recent_arrivals),
             clock=clock,
             winner=winner,
-            move_history=move_history or {},
+            move_history=_stringify_move_history(move_history or {}),
             score=score or {},
         )

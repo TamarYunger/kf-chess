@@ -582,8 +582,8 @@ def test_full_stack_room_create_and_join_seats_both_players():
         assert server._connection_room[creator] == room_id
         assert server._connection_room[joiner] == room_id
         room = shard._rooms[room_id]
-        assert {room.role_of(shard._proxy_for(server._connection_ids[creator])),
-                room.role_of(shard._proxy_for(server._connection_ids[joiner]))} == set(settings.COLORS)
+        assert {room._seats[shard._proxy_for(server._connection_ids[creator])],
+                room._seats[shard._proxy_for(server._connection_ids[joiner])]} == set(settings.COLORS)
 
     run(scenario())
 
@@ -633,7 +633,7 @@ def test_full_stack_disconnect_starts_the_shard_side_grace_period():
         await server._handle_message(bob, "PLAY")
         room_id = server._connection_room[alice]
         room = shard._rooms[room_id]
-        alice_color = room.role_of(shard._proxy_for(server._connection_ids[alice]))
+        alice_color = room._seats[shard._proxy_for(server._connection_ids[alice])]
 
         await server.handle_connection(alice)  # empty incoming - "disconnects" immediately
 

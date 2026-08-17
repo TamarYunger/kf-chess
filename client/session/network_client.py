@@ -31,8 +31,14 @@ class NetworkClient:
     future login screen) can react to connectivity without polling.
     """
 
-    def __init__(self, url, incoming=None, reconnect_delay=DEFAULT_RECONNECT_DELAY_SECONDS,
-                 close_timeout=10, open_timeout=10):
+    def __init__(
+        self,
+        url: str,
+        incoming: queue.Queue | None = None,
+        reconnect_delay: float = DEFAULT_RECONNECT_DELAY_SECONDS,
+        close_timeout: float = 10,
+        open_timeout: float = 10,
+    ) -> None:
         self._url = url
         self.incoming = incoming if incoming is not None else queue.Queue()
         self._reconnect_delay = reconnect_delay
@@ -40,10 +46,10 @@ class NetworkClient:
         # waiting out websockets' real-world defaults on every stop().
         self._close_timeout = close_timeout
         self._open_timeout = open_timeout
-        self._loop = None
-        self._thread = None
-        self._task = None
-        self._connection = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._task: asyncio.Task | None = None
+        self._connection: object = None
         # Set once _run() has assigned self._loop/self._task, on the
         # background thread - stop() must not act on either before then.
         # Without this, calling stop() right after start() (there is
@@ -54,11 +60,11 @@ class NetworkClient:
         # join() timeout, leaking a connection attempt that runs forever.
         self._ready = threading.Event()
 
-    def start(self):
+    def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def stop(self):
+    def stop(self) -> None:
         if self._thread is None:
             return  # start() was never called - nothing to wait for or cancel
         # A second stop() (or one that races the thread's own natural
@@ -72,7 +78,7 @@ class NetworkClient:
                 pass
         self._thread.join(timeout=5)
 
-    def send(self, message):
+    def send(self, message: str | dict) -> None:
         """Thread-safe: schedules `message` to be sent on the network
         thread - a `str` is sent as-is (the server's own text commands,
         e.g. "MOVE e2 e4"), anything else is JSON-encoded first. Silently
@@ -82,14 +88,14 @@ class NetworkClient:
             return
         asyncio.run_coroutine_threadsafe(self._send_async(message), self._loop)
 
-    async def _send_async(self, message):
+    async def _send_async(self, message: str | dict) -> None:
         connection = self._connection
         if connection is None:
             return
         payload = message if isinstance(message, str) else json.dumps(message)
         await connection.send(payload)
 
-    def drain(self):
+    def drain(self) -> list[dict]:
         """Pops every message currently queued, without blocking - for the
         render loop to call once per frame."""
         messages = []
@@ -102,7 +108,7 @@ class NetworkClient:
 
     # -- background thread -------------------------------------------------
 
-    def _run(self):
+    def _run(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
         self._task = self._loop.create_task(self._connect_loop())
@@ -114,7 +120,7 @@ class NetworkClient:
         finally:
             self._loop.close()
 
-    async def _connect_loop(self):
+    async def _connect_loop(self) -> None:
         while True:
             try:
                 async with websockets.connect(

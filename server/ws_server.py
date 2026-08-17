@@ -39,6 +39,8 @@ import logging
 import os
 import secrets
 import socket
+from types import ModuleType
+from typing import Callable
 
 import websockets
 
@@ -47,7 +49,7 @@ from server.db import build_redis_client
 from server.health import start_health_server
 from server.logging_config import configure_server_logging
 from server.protocol import ProtocolError, encode_error, encode_login, encode_login_rejected, parse_command
-from server.safe_send import safe_send
+from server.safe_send import Connection, safe_send
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +83,7 @@ DEFAULT_PORT = 8765
 HEALTH_PORT = 9100
 
 
-def _default_redis_client():
+def _default_redis_client() -> object:
     """GameServer's redis_client=None default - an in-memory fake, not a
     real connection, for exactly the reason AccountStore()'s own default
     used to be in-memory SQLite: a GameServer must stay constructible
@@ -94,7 +96,7 @@ def _default_redis_client():
     return fakeredis.FakeRedis()
 
 
-def _default_nats_client():
+def _default_nats_client() -> object:
     """Same reasoning as _default_redis_client, for NATS: a GameServer
     must stay constructible/testable standalone, without a real NATS
     server reachable. This fake only supports publish() (GameServer never
@@ -103,10 +105,10 @@ def _default_nats_client():
     publish() is enough for a GameServer nothing ever talks back to)."""
 
     class _NullNatsClient:
-        async def publish(self, subject, payload):
+        async def publish(self, subject: str, payload: bytes) -> None:
             pass
 
-        async def subscribe(self, subject, cb):
+        async def subscribe(self, subject: str, cb: object) -> None:
             pass
 
     return _NullNatsClient()
@@ -150,25 +152,31 @@ class GameServer:
         envelope to - see this module's own docstring.
     """
 
-    def __init__(self, config=settings, redis_client=None, nats_client=None, instance_id=None):
+    def __init__(
+        self,
+        config: ModuleType = settings,
+        redis_client: object = None,
+        nats_client: object = None,
+        instance_id: str | None = None,
+    ) -> None:
         self._config = config
         self._redis = redis_client if redis_client is not None else _default_redis_client()
         self._nats = nats_client if nats_client is not None else _default_nats_client()
         self._instance_id = instance_id or socket.gethostname()
-        self._clients = set()
-        self._players = {}  # connection -> {"username", "rating"} (authenticated, connected)
-        self._connection_room = {}  # connection -> room_id (learned from a relayed "room" message)
-        self._connection_ids = {}  # connection -> connection_id
-        self._connections_by_id = {}  # connection_id -> connection
+        self._clients: set[Connection] = set()
+        self._players: dict[Connection, dict] = {}  # connection -> {"username", "rating"} (authenticated, connected)
+        self._connection_room: dict[Connection, str] = {}  # connection -> room_id (from a relayed "room" message)
+        self._connection_ids: dict[Connection, str] = {}  # connection -> connection_id
+        self._connections_by_id: dict[str, Connection] = {}  # connection_id -> connection
 
-    async def start(self):
+    async def start(self) -> None:
         """Subscribes to this instance's own outbox - must be awaited once
         before any connection can complete a round trip through the Shard
         (see serve_forever). Separate from __init__ because subscribing is
         an async operation."""
         await self._nats.subscribe(f"outbox.{self._instance_id}", cb=self._handle_outbox_message)
 
-    async def handle_connection(self, connection):
+    async def handle_connection(self, connection: Connection) -> None:
         """The per-connection coroutine websockets.serve runs for as long
         as that connection is open. Nothing is sent immediately on
         connect - there's no default game to show until AUTH, then PLAY/
@@ -197,7 +205,7 @@ class GameServer:
                         "kind": "disconnect", "connection_id": connection_id, "room_id": room_id,
                     })
 
-    async def _handle_message(self, connection, raw):
+    async def _handle_message(self, connection: Connection, raw: str) -> None:
         try:
             command = parse_command(raw)
         except ProtocolError as error:
@@ -227,7 +235,7 @@ class GameServer:
 
     # -- AUTH: authentication only, no room ---------------------------------
 
-    async def _handle_auth(self, connection, token):
+    async def _handle_auth(self, connection: Connection, token: str) -> None:
         if connection in self._players:
             # Re-AUTH from an already-authenticated connection just
             # confirms the same identity again.
@@ -259,7 +267,7 @@ class GameServer:
 
     # -- PLAY / matchmaking ---------------------------------------------------
 
-    async def _handle_play(self, connection):
+    async def _handle_play(self, connection: Connection) -> None:
         """Forwards to server/matchmaker_service.py's Matchmaker - see this
         class's own docstring for why the waiting queue isn't kept here.
         "Already searching" is deliberately not checked here (this class no
@@ -279,7 +287,7 @@ class GameServer:
 
     # -- ROOM CREATE: allocator hop -------------------------------------------
 
-    async def _handle_room_create(self, connection):
+    async def _handle_room_create(self, connection: Connection) -> None:
         """Forwards to server/allocator_service.py's Allocator, the same
         way _handle_play forwards to the Matchmaker - there's no room_id
         yet for this class to resolve a Shard instance from (that's
@@ -299,7 +307,7 @@ class GameServer:
 
     # -- Forwarding to the Shard ---------------------------------------------
 
-    async def _forward_command(self, connection, raw, room_id, verb_for_error):
+    async def _forward_command(self, connection: Connection, raw: str, room_id: str, verb_for_error: str) -> None:
         player = self._players.get(connection)
         if player is None:
             await self._safe_send(connection, json.dumps(encode_error(f"Must AUTH before {verb_for_error}")))
@@ -313,7 +321,7 @@ class GameServer:
         if instance_id is None:
             await self._safe_send(connection, json.dumps(encode_error(f"Room {room_id!r} not found")))
 
-    async def _publish_to_shard(self, room_id, envelope):
+    async def _publish_to_shard(self, room_id: str, envelope: dict) -> str | None:
         """Looks up room_id's current owner in the room_owner registry
         (see this module's own docstring for how that entry gets there
         and why a missing one means "no such room right now" either way)
@@ -332,7 +340,7 @@ class GameServer:
                                   json.dumps(envelope).encode("utf-8"))
         return instance_id
 
-    async def _handle_outbox_message(self, msg):
+    async def _handle_outbox_message(self, msg: object) -> None:
         """The NATS subscription callback for this instance's own outbox
         (see start()) - one message per reply/broadcast the Shard's Room
         addressed to a connection_id this instance is holding. Relays it
@@ -350,21 +358,29 @@ class GameServer:
         if decoded.get("type") == "room":
             self._connection_room[connection] = decoded["payload"]["room_id"]
 
-    async def _safe_send(self, connection, message):
+    async def _safe_send(self, connection: Connection, message: str) -> None:
         # A client can disconnect between being read from self._clients and
         # actually being sent to (e.g. mid-broadcast) - that's not this
         # server's problem to raise about; handle_connection's own loop
         # ending is what removes it from self._clients.
         await safe_send(connection, message)
 
-    def metrics(self):
+    def metrics(self) -> dict:
         """Fed to server/health.py's GET /metrics by serve_forever - see
         that module's own docstring for the format."""
         return {"kf_chess_ws_active_connections": len(self._clients)}
 
 
-async def serve_forever(host=DEFAULT_HOST, port=DEFAULT_PORT, on_ready=None, config=settings,
-                         redis_client=None, nats_client=None, instance_id=None, health_port=HEALTH_PORT):
+async def serve_forever(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    on_ready: Callable | None = None,
+    config: ModuleType = settings,
+    redis_client: object = None,
+    nats_client: object = None,
+    instance_id: str | None = None,
+    health_port: int = HEALTH_PORT,
+) -> None:
     """Runs the gateway until cancelled. `on_ready(bound_server, game_server,
     health_runner)` is called once both sockets are actually listening -
     mainly so tests can ask for an OS-assigned port (port=0/health_port=0)

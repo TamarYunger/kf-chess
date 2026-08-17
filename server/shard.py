@@ -56,14 +56,9 @@ import time
 from types import ModuleType
 from typing import Callable
 
-from board.loaders import load_text_board
 from bus.event_bus import EventBus
 from config import settings
-from game.engine import GameEngine
-from realtime.real_time_arbiter import RealTimeArbiter
-from rules.game_conditions import KingCaptureWinCondition, LastRankPromotion
-from rules.rule_engine import RuleEngine
-from rules.rule_registry import build_default_registry
+from game.engine_factory import build_engine
 from server.db import AccountStore, PostgresAccountStore, build_redis_client
 from server.health import start_health_server
 from server.logging_config import configure_server_logging
@@ -107,20 +102,6 @@ STANDARD_BOARD_TEXT = [
     "wP wP wP wP wP wP wP wP",
     "wR wN wB wQ wK wB wN wR",
 ]
-
-
-def build_engine(board_lines: list[str], config: ModuleType = settings, events: EventBus | None = None) -> GameEngine:
-    registry = build_default_registry(config)
-    board = load_text_board(board_lines, registry, config)
-    arbiter = RealTimeArbiter(board=board, promotion_rule=LastRankPromotion(config.PAWN_DIRECTION), config=config)
-    return GameEngine(
-        board=board,
-        rule_engine=RuleEngine(rule_registry=registry, config=config),
-        arbiter=arbiter,
-        win_condition=KingCaptureWinCondition(),
-        config=config,
-        events=events,
-    )
 
 
 class GameShard:

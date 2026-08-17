@@ -70,6 +70,16 @@ class GameEngine:
     def game_over(self) -> bool:
         return self._game_over
 
+    @property
+    def board(self) -> Board:
+        """The Board this engine coordinates moves against - for callers
+        that need direct geometry access alongside the engine (e.g. a
+        BoardMapper), so they don't have to keep their own separate
+        reference to the same object the engine was built with (see
+        game/engine_factory.build_engine, the shared wiring every
+        composition root uses to build both together)."""
+        return self._board
+
     def is_busy(self, cell: tuple[int, int]) -> bool:
         return (
             self._arbiter.is_moving_from(cell)

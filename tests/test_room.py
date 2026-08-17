@@ -8,7 +8,7 @@ from config import settings
 from server.db import AccountStore
 from server.protocol import parse_command
 from server.room import DISCONNECT_GRACE_SECONDS, Room
-from server.shard import build_engine
+from game.engine_factory import build_engine
 
 
 class FakeConnection:

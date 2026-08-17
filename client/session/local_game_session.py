@@ -10,18 +10,13 @@ import dataclasses
 import time
 from types import ModuleType
 
-from board.loaders import load_text_board
 from bus.event_bus import EventBus
 from bus.event_types import CLICK, JUMP
 from game.board_mapper import BoardMapper
 from game.controller import Controller
-from game.engine import GameEngine
+from game.engine_factory import build_engine
 from game.presentation_stub import attach_presentation_stub
 from game.snapshot import GameSnapshot
-from realtime.real_time_arbiter import RealTimeArbiter
-from rules.game_conditions import KingCaptureWinCondition, LastRankPromotion
-from rules.rule_engine import RuleEngine
-from rules.rule_registry import build_default_registry
 from client.session.game_session import GameSession
 
 # Commands reaching this session already carry a board cell - GameScreen
@@ -36,24 +31,10 @@ _IDENTITY_CELL_SIZE = 1
 
 class LocalGameSession(GameSession):
     def __init__(self, board_lines: list[str], config: ModuleType, events: EventBus | None = None) -> None:
-        registry = build_default_registry(config)
-        board = load_text_board(board_lines, registry, config)
-        arbiter = RealTimeArbiter(
-            board=board,
-            promotion_rule=LastRankPromotion(config.PAWN_DIRECTION),
-            config=config,
-        )
         events = events if events is not None else EventBus()
         attach_presentation_stub(events)
-        self._engine = GameEngine(
-            board=board,
-            rule_engine=RuleEngine(rule_registry=registry, config=config),
-            arbiter=arbiter,
-            win_condition=KingCaptureWinCondition(),
-            config=config,
-            events=events,
-        )
-        mapper = BoardMapper(board, _IDENTITY_CELL_SIZE)
+        self._engine = build_engine(board_lines, config, events=events)
+        mapper = BoardMapper(self._engine.board, _IDENTITY_CELL_SIZE)
         self._controller = Controller(engine=self._engine, board_mapper=mapper)
         self._last_tick = time.time()
         self._latest_snapshot: GameSnapshot | None = None

@@ -32,7 +32,32 @@ jobs:
         shell: pwsh
         run: |
           $service = Get-Service -Name "postgresql*" | Select-Object -First 1
-          Start-Service $service.Name
+          # windows-latest currently maps to windows-2025, which has a known
+          # PostgreSQL 17 data-directory permission bug (actions/runner-images
+          # #13040, unresolved as of writing): the service account can't
+          # access its own data dir, so Start-Service fails with "Permission
+          # denied" before ever reaching our own setup. Grant that account
+          # access first - remove this once GitHub ships the real fix.
+          $account = (Get-CimInstance Win32_Service -Filter "Name='$($service.Name)'").StartName
+          $dataDir = "C:\Program Files\PostgreSQL\17\data"
+          icacls $dataDir /grant "${account}:(OI)(CI)F" /T | Out-Null
+          try {
+            Start-Service $service.Name -ErrorAction Stop
+          } catch {
+            # The icacls grant above is a guess at the actual cause (issue
+            # #13040 reports a permission error, not the generic message
+            # Start-Service itself gives) - if it's still broken, print
+            # PostgreSQL's own log instead of failing blind a second time.
+            Write-Host "Start-Service failed: $_"
+            $logDir = Join-Path $dataDir "log"
+            if (Test-Path $logDir) {
+              Get-ChildItem $logDir -Filter "*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+                ForEach-Object { Write-Host "--- $($_.FullName) ---"; Get-Content $_.FullName -Tail 50 }
+            } else {
+              Write-Host "No PostgreSQL log directory found at $logDir"
+            }
+            throw
+          }
           $env:PGPASSWORD = "postgres"
           & "$env:PGBIN\psql" -U postgres -h localhost -c "CREATE USER kfchess WITH PASSWORD 'kfchess';"
           & "$env:PGBIN\psql" -U postgres -h localhost -c "CREATE DATABASE kfchess OWNER kfchess;"

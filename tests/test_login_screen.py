@@ -118,6 +118,26 @@ def test_enter_in_the_username_field_moves_focus_to_password_without_submitting(
     assert session.commands == []
 
 
+def test_enter_in_username_does_not_auto_submit_a_stale_password():
+    # Regression: handle_key used to forward every key to both fields
+    # unconditionally. Enter in username synchronously refocuses password
+    # (on_submit -> _focus_password) *within* the same handle_key call, so
+    # the old code then handed that same Enter to the now-focused password
+    # field too, submitting immediately with whatever password value was
+    # already there - before the user had a chance to type a new one.
+    screen, session, events = make_screen()
+    click_password(screen)
+    type_text(screen, "old-password")  # a value left over from earlier
+    click_username(screen)
+    type_text(screen, "alice")
+
+    screen.handle_key(13)  # Enter in username - must not also submit
+
+    assert session.commands == []
+    assert screen._password_field.focused is True
+    assert screen._password_field.value == "old-password"
+
+
 def test_typing_both_fields_and_clicking_login_submits_username_and_password():
     screen, session, events = make_screen()
     click_username(screen)

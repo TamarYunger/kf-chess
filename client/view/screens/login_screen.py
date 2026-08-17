@@ -100,9 +100,15 @@ class LoginScreen(Screen):
             self._submit()
 
     def handle_key(self, key: int) -> None:
-        # Only one of the two is ever focused - TextInput.handle_key is a
-        # no-op while unfocused, so routing the key to both is safe.
-        self._username_field.handle_key(key)
+        # Stop once a field actually consumes the key - not "only while
+        # unfocused" as before. Enter in the username field fires
+        # on_submit -> _focus_password synchronously, inside this same
+        # call, which focuses the password field before we'd reach it
+        # below; forwarding the same Enter into it right after would
+        # submit whatever (possibly stale) password was already sitting
+        # there, before the user ever typed a new one.
+        if self._username_field.handle_key(key):
+            return
         self._password_field.handle_key(key)
 
     # -- internal ------------------------------------------------------

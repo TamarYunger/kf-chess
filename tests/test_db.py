@@ -1,4 +1,4 @@
-from server.db import DEFAULT_RATING, AccountStore, build_redis_client
+from server.db import DEFAULT_RATING, AccountStore, build_postgres_dsn, build_redis_client
 
 
 def test_first_login_creates_the_account_at_the_default_rating():
@@ -138,3 +138,17 @@ def test_build_redis_client_uses_the_configured_host_and_port(monkeypatch):
     kwargs = client.connection_pool.connection_kwargs
     assert kwargs["host"] == "some-redis-host"
     assert kwargs["port"] == 16379
+
+
+def test_build_postgres_dsn_reads_every_expected_env_var(monkeypatch):
+    monkeypatch.setenv("POSTGRES_HOST", "some-postgres-host")
+    monkeypatch.setenv("POSTGRES_PORT", "6543")
+    monkeypatch.setenv("POSTGRES_DB", "kfchess")
+    monkeypatch.setenv("POSTGRES_USER", "kfchess_user")
+    monkeypatch.setenv("POSTGRES_PASSWORD", "secret")
+
+    dsn = build_postgres_dsn()
+
+    assert dsn == (
+        "host=some-postgres-host port=6543 dbname=kfchess user=kfchess_user password=secret"
+    )

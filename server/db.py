@@ -118,6 +118,23 @@ def build_redis_client() -> "redis.Redis":
     return redis.Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"]))
 
 
+def build_postgres_dsn() -> str:
+    """The libpq keyword/value DSN string every service's own main() needs
+    when DB_BACKEND=postgres, reading the same POSTGRES_* env vars docker-
+    compose.yml sets. Just DSN *syntax*, not a "which backend" decision
+    (that choice is deliberately left duplicated in each service's own
+    main() - see server/shard.py's own comment on it) - so it lives here
+    alongside build_redis_client, the other piece of connection-string
+    wiring."""
+    return (
+        f"host={os.environ['POSTGRES_HOST']} "
+        f"port={os.environ['POSTGRES_PORT']} "
+        f"dbname={os.environ['POSTGRES_DB']} "
+        f"user={os.environ['POSTGRES_USER']} "
+        f"password={os.environ['POSTGRES_PASSWORD']}"
+    )
+
+
 class PostgresAccountStore:
     """Same three-method contract as AccountStore (authenticate/
     update_rating/get_rating), backed by PostgreSQL instead of a local

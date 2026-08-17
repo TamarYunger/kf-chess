@@ -17,7 +17,7 @@ from pathlib import Path
 
 from aiohttp import web
 
-from server.db import AccountStore, PostgresAccountStore, build_redis_client
+from server.db import AccountStore, PostgresAccountStore, build_postgres_dsn, build_redis_client
 from server.logging_config import configure_server_logging
 
 logger = logging.getLogger(__name__)
@@ -104,14 +104,7 @@ def main():  # pragma: no cover
     # deliberately, not shared, for the same reason given there: each
     # service is its own composition root (see that module's docstring).
     if os.environ.get("DB_BACKEND", "sqlite") == "postgres":
-        dsn = (
-            f"host={os.environ['POSTGRES_HOST']} "
-            f"port={os.environ['POSTGRES_PORT']} "
-            f"dbname={os.environ['POSTGRES_DB']} "
-            f"user={os.environ['POSTGRES_USER']} "
-            f"password={os.environ['POSTGRES_PASSWORD']}"
-        )
-        accounts = PostgresAccountStore(dsn)
+        accounts = PostgresAccountStore(build_postgres_dsn())
     else:
         accounts = AccountStore(DEFAULT_DB_PATH)
 

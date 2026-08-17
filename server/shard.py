@@ -60,7 +60,7 @@ from board.loaders import STANDARD_BOARD_TEXT
 from bus.event_bus import EventBus
 from config import settings
 from game.engine_factory import build_engine
-from server.db import AccountStore, PostgresAccountStore, build_redis_client
+from server.db import AccountStore, PostgresAccountStore, build_postgres_dsn, build_redis_client
 from server.health import start_health_server
 from server.inbox import handle_inbox_message
 from server.logging_config import configure_server_logging
@@ -301,14 +301,7 @@ def main():  # pragma: no cover
     # for the same reason given there: each service is its own
     # composition root.
     if os.environ.get("DB_BACKEND", "sqlite") == "postgres":
-        dsn = (
-            f"host={os.environ['POSTGRES_HOST']} "
-            f"port={os.environ['POSTGRES_PORT']} "
-            f"dbname={os.environ['POSTGRES_DB']} "
-            f"user={os.environ['POSTGRES_USER']} "
-            f"password={os.environ['POSTGRES_PASSWORD']}"
-        )
-        accounts = PostgresAccountStore(dsn)
+        accounts = PostgresAccountStore(build_postgres_dsn())
     else:
         from pathlib import Path
         accounts = AccountStore(str(Path(__file__).resolve().parent / "accounts.db"))

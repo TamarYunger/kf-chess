@@ -88,6 +88,24 @@ def test_clicking_the_password_field_focuses_it_directly():
     assert screen._username_field.focused is False
 
 
+def test_clicking_back_into_username_blurs_an_already_focused_password_field():
+    # Regression: handle_click used to return as soon as username claimed
+    # the click, without ever calling password_field.handle_click - leaving
+    # password still focused too, so a keystroke meant for username also
+    # landed in password.
+    screen, session, events = make_screen()
+    click_password(screen)
+
+    click_username(screen)
+
+    assert screen._username_field.focused is True
+    assert screen._password_field.focused is False
+
+    type_text(screen, "x")
+    assert screen._username_field.value == "x"
+    assert screen._password_field.value == ""
+
+
 def test_enter_in_the_username_field_moves_focus_to_password_without_submitting():
     screen, session, events = make_screen()
     click_username(screen)

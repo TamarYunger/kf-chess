@@ -89,10 +89,13 @@ class LoginScreen(Screen):
             self._draw_error_banner(canvas, self._error_message)
 
     def handle_click(self, x: int, y: int) -> None:
-        if self._username_field.handle_click(x, y):
-            return  # the field claimed this click (and is now focused)
-        if self._password_field.handle_click(x, y):
-            return
+        # Always drive both fields, not just the one the click landed in -
+        # TextInput.handle_click focuses on a hit and blurs on a miss, so a
+        # click inside username must still blur password if it was focused
+        # (short-circuiting after the first hit used to skip that blur,
+        # leaving both fields focused and every keystroke going to both).
+        self._username_field.handle_click(x, y)
+        self._password_field.handle_click(x, y)
         if self._button.contains(x, y):
             self._submit()
 

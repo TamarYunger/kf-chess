@@ -193,6 +193,16 @@ class GameServer:
             if connection_id is not None:
                 self._connections_by_id.pop(connection_id, None)
                 self._redis.delete(f"connection:{connection_id}")
+                # Unconditional, not just when room_id is set: a connection
+                # that dropped while still waiting in the Matchmaker's queue
+                # (PLAY sent, no room yet) has no room_id here at all, but
+                # would otherwise be left in server/matchmaker_service.py's
+                # queue forever - reachable by some later PLAY, matching it
+                # against an opponent who can never actually join. A no-op
+                # if this connection was never queued (or already matched).
+                await self._nats.publish(MATCHMAKER_INBOX_SUBJECT, json.dumps({
+                    "kind": "leave", "connection_id": connection_id,
+                }).encode("utf-8"))
                 if room_id is not None:
                     # The Shard's Room needs to know too, to start this
                     # seat's disconnect grace period (server/room.py's
@@ -281,6 +291,7 @@ class GameServer:
             return  # already in a room - PLAY is a no-op
 
         await self._nats.publish(MATCHMAKER_INBOX_SUBJECT, json.dumps({
+            "kind": "play",
             "connection_id": self._connection_ids[connection],
             "username": player["username"], "rating": player["rating"],
         }).encode("utf-8"))

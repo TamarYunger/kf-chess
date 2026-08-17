@@ -117,6 +117,30 @@ def test_play_again_while_still_queued_is_a_no_op():
     run(scenario())
 
 
+def test_leave_removes_a_queued_connection():
+    async def scenario():
+        service, nats_client, redis_client = make_service()
+        await send(service, {"connection_id": "conn-1", "username": "alice", "rating": 1200})
+        assert redis_client.hexists(QUEUE_KEY, "conn-1")
+
+        await send(service, {"kind": "leave", "connection_id": "conn-1"})
+
+        assert not redis_client.hexists(QUEUE_KEY, "conn-1")
+
+    run(scenario())
+
+
+def test_leave_for_a_connection_that_was_never_queued_is_a_no_op():
+    async def scenario():
+        service, nats_client, redis_client = make_service()
+
+        await send(service, {"kind": "leave", "connection_id": "conn-1"})  # must not raise
+
+        assert not redis_client.hexists(QUEUE_KEY, "conn-1")
+
+    run(scenario())
+
+
 def test_a_malformed_envelope_is_logged_not_raised():
     async def scenario():
         service, nats_client, redis_client = make_service()

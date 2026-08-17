@@ -81,12 +81,18 @@ class MatchmakerService:
 
     async def handle_message(self, msg: object) -> None:
         """The NATS subscription callback for INBOX_SUBJECT - one envelope
-        per PLAY request. Fire-and-forget delivery, same reasoning as
-        server/shard.py's own handle_message: a bad envelope must not
-        crash the whole Matchmaker over one bad message."""
+        per PLAY request or per queue-departure notice (see _handle_leave).
+        Fire-and-forget delivery, same reasoning as server/shard.py's own
+        handle_message: a bad envelope must not crash the whole Matchmaker
+        over one bad message. Envelopes with no "kind" are treated as "play"
+        - the shape server/ws_server.py's _handle_play always sent before
+        "leave" existed."""
         try:
             envelope = json.loads(msg.data)
-            await self._handle_play(envelope)
+            if envelope.get("kind", "play") == "leave":
+                await self._handle_leave(envelope)
+            else:
+                await self._handle_play(envelope)
         except Exception:
             logger.exception("failed to handle matchmaker inbox message")
 
@@ -114,6 +120,15 @@ class MatchmakerService:
                 {"connection_id": opponent_id, "username": opponent["username"], "rating": opponent["rating"]},
             ],
         }).encode("utf-8"))
+
+    async def _handle_leave(self, envelope: dict) -> None:
+        """server/ws_server.py publishes this on every disconnect, whether
+        or not the connection was actually queued here - a no-op removal
+        (hdel of a key that isn't there) is cheaper than requiring the
+        Gateway to know our own queue state. Without this, a connection
+        that drops while still waiting for an opponent would stay matchable
+        forever, stranding whoever it later gets matched against."""
+        self._redis.hdel(QUEUE_KEY, envelope["connection_id"])
 
     async def resolve_timeouts(self) -> None:
         now = time.time()

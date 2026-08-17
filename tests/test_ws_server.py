@@ -325,7 +325,7 @@ def test_play_forwards_a_play_envelope_to_the_matchmaker():
         assert subject == "matchmaker.inbox"
         envelope = json.loads(payload)
         assert envelope == {
-            "connection_id": server._connection_ids[conn], "username": "alice", "rating": 1200,
+            "kind": "play", "connection_id": server._connection_ids[conn], "username": "alice", "rating": 1200,
         }
 
     run(scenario())
@@ -413,7 +413,9 @@ def test_move_forwards_a_command_envelope_to_the_room_owning_shard():
 
         await server.handle_connection(conn)
 
-        subject, payload = server._nats.published[-2]  # last is the disconnect envelope, not this MOVE
+        # published order: this MOVE, then the disconnect-time matchmaker
+        # "leave", then the disconnect envelope to the shard.
+        subject, payload = server._nats.published[-3]
         assert subject == "shard.inbox.shard-x"
         envelope = json.loads(payload)
         assert envelope == {
@@ -449,7 +451,9 @@ def test_room_join_to_an_unregistered_room_is_rejected_without_reaching_any_shar
 
         error = json.loads(conn.sent[-1])
         assert error == {"type": "error", "payload": {"message": "Room 'nonexistent' not found"}}
-        assert server._nats.published == []
+        # ROOM JOIN itself never reached any shard - the only publish is the
+        # disconnect-time matchmaker "leave" from handle_connection ending.
+        assert [subject for subject, _ in server._nats.published] == ["matchmaker.inbox"]
 
     run(scenario())
 
@@ -527,16 +531,19 @@ def test_disconnecting_a_seated_connection_publishes_a_disconnect_envelope():
     run(scenario())
 
 
-def test_disconnecting_with_no_known_room_owner_publishes_nothing():
+def test_disconnecting_with_no_known_room_owner_publishes_only_the_matchmaker_leave():
     async def scenario():
         server = make_server()
         conn = FakeConnection()  # empty incoming - handle_connection's loop ends right away
         await authenticate(server, conn, "alice")
+        connection_id = server._connection_ids[conn]
         server._connection_room[conn] = "abc123"  # no room_owner:abc123 registered - lease expired or never was
 
         await server.handle_connection(conn)
 
-        assert server._nats.published == []
+        subject, payload = server._nats.published[-1]
+        assert subject == "matchmaker.inbox"
+        assert json.loads(payload) == {"kind": "leave", "connection_id": connection_id}
 
     run(scenario())
 
@@ -549,6 +556,26 @@ def test_disconnecting_an_unauthenticated_connection_publishes_nothing():
         await server.handle_connection(conn)
 
         assert server._nats.published == []
+
+    run(scenario())
+
+
+def test_disconnecting_while_still_queued_for_play_leaves_the_matchmaker_queue():
+    # Regression: a connection that drops before ever being matched has no
+    # room_id at all - it must still tell the Matchmaker to stop offering it
+    # as a match, or a later PLAY could be matched against a socket that's
+    # already gone (see server/matchmaker_service.py's _handle_leave).
+    async def scenario():
+        server = make_server()
+        conn = FakeConnection()  # empty incoming - handle_connection's loop ends right away
+        await authenticate(server, conn, "alice")
+        connection_id = server._connection_ids[conn]
+
+        await server.handle_connection(conn)
+
+        subject, payload = server._nats.published[-1]
+        assert subject == "matchmaker.inbox"
+        assert json.loads(payload) == {"kind": "leave", "connection_id": connection_id}
 
     run(scenario())
 

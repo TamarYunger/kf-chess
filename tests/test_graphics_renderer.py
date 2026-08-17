@@ -4,13 +4,28 @@ from game.models import MoveRecord
 from realtime.models import Arrival
 from rules.reasons import Reason
 from game.snapshot import GameSnapshot
-from client.view.graphics_renderer import GraphicsRenderer, SIDE_PANEL_WIDTH
+from client.view.graphics_renderer import MISSING_SPRITE_COLOR, GraphicsRenderer, SIDE_PANEL_WIDTH
 
 ASSETS_DIR = "assets"
 
 
 def make_renderer():
     return GraphicsRenderer(settings, assets_dir=ASSETS_DIR)
+
+
+def test_a_missing_sprite_falls_back_to_a_placeholder_instead_of_raising():
+    # Regression: a missing/corrupt sprite frame used to crash the whole
+    # render loop the first time that exact (folder, state, frame_index)
+    # combo was actually requested - possibly deep into a live game.
+    renderer = make_renderer()
+
+    sprite = renderer._sprite("BW", "idle", 9999)  # far beyond any real frame
+
+    assert sprite.img.shape[:2] == (settings.CELL_SIZE, settings.CELL_SIZE)
+    assert tuple(sprite.img[0, 0]) == MISSING_SPRITE_COLOR
+    # Cached like a real sprite would be - a second request for the same
+    # missing frame doesn't need to hit the filesystem again.
+    assert renderer._sprite("BW", "idle", 9999) is sprite
 
 
 def test_render_produces_a_canvas_sized_to_the_board_plus_two_side_panels():

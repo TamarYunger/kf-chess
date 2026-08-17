@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING
@@ -12,7 +13,16 @@ from client.view.piece_assets import load_all_piece_configs, sprite_path
 if TYPE_CHECKING:
     from game.snapshot import GameSnapshot
 
+logger = logging.getLogger(__name__)
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# What a missing/corrupt sprite frame renders as instead - loud (magenta,
+# the traditional "missing texture" color) so it's obviously wrong rather
+# than silently invisible, but it lets the render loop - and the game
+# session it's serving - keep going instead of crashing mid-game the first
+# time a rarely-hit animation frame is actually needed (see _sprite()).
+MISSING_SPRITE_COLOR = (255, 0, 255, 255)  # BGRA magenta
 
 SELECTION_COLOR = (0, 255, 255, 255)  # BGRA yellow
 SELECTION_THICKNESS = 4
@@ -130,7 +140,14 @@ class GraphicsRenderer:
         if sprite is None:
             cell = self._config.CELL_SIZE
             path = sprite_path(folder, state, frame_index, self._pieces_root)
-            sprite = Img().read(str(path), size=(cell, cell))
+            try:
+                sprite = Img().read(str(path), size=(cell, cell))
+            except FileNotFoundError:
+                # Missing or unreadable (cv2 also raises this for a corrupt
+                # file - see Img.read) - a live game shouldn't crash over
+                # one bad sprite frame that only gets requested this late.
+                logger.warning("missing or unreadable sprite %s - using a placeholder", path)
+                sprite = Img.create(cell, cell, color=MISSING_SPRITE_COLOR)
             self._sprite_cache[key] = sprite
         return sprite
 

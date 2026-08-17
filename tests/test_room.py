@@ -447,6 +447,16 @@ def test_game_over_updates_both_ratings_via_the_shared_events_bus():
     run(scenario())
 
 
+def test_game_over_property_reflects_the_engine():
+    room, engine = make_room(["wR . .", ". . .", "bK . ."])
+    assert room.game_over is False
+
+    engine.request_move((0, 0), (2, 0))  # captures bK
+    engine.wait(2 * settings.MOVE_DURATION)
+
+    assert room.game_over is True
+
+
 def test_tick_broadcasts_an_arrival_message_once_a_move_lands():
     async def scenario():
         room, engine = make_room(["wR . .", ". . .", "bK . ."])

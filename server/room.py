@@ -88,6 +88,14 @@ class Room:
     def started(self) -> bool:
         return self._started
 
+    @property
+    def game_over(self) -> bool:
+        """So server/shard.py's GameShard can tell once this room is done
+        and prune it from its own bookkeeping (see GameShard.tick) - once
+        the engine reports game over, nothing else here (a move, a
+        disconnect grace period) can start again."""
+        return self._engine.game_over
+
     def seat_or_view(self, connection: Connection, username: str, rating: int) -> str:
         """The single way any connection becomes part of this room -
         reused for a room's creator, a joiner, a reconnect within the

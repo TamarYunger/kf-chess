@@ -245,6 +245,27 @@ def test_disconnect_starts_the_room_grace_period():
     run(scenario())
 
 
+def test_disconnect_removes_the_cached_proxy():
+    # Regression: connection_ids are never reused (a fresh one is minted
+    # per socket), so a proxy left in self._proxies after its connection
+    # disconnects is never looked up again - just a permanent leak.
+    async def scenario():
+        shard, nats_client, redis_client = make_shard()
+        register(redis_client, "conn-1")
+        register(redis_client, "conn-2")
+        await create_room(shard, "room1", [
+            {"connection_id": "conn-1", "username": "alice", "rating": 1200},
+            {"connection_id": "conn-2", "username": "bob", "rating": 1200},
+        ])
+        assert "conn-1" in shard._proxies
+
+        await send(shard, {"kind": "disconnect", "connection_id": "conn-1", "room_id": "room1"})
+
+        assert "conn-1" not in shard._proxies
+
+    run(scenario())
+
+
 def test_disconnect_for_an_unknown_room_or_connection_is_harmless():
     async def scenario():
         shard, nats_client, redis_client = make_shard()
@@ -283,6 +304,34 @@ def test_room_join_reconnect_notifies_the_opponent_still_in_the_room():
             m for m in messages_for(nats_client, "conn-1") if m["type"] == "opponent_reconnected"
         ]
         assert reconnected_notice == [{"type": "opponent_reconnected", "payload": {"color": bob_role}}]
+
+    run(scenario())
+
+
+def test_tick_prunes_a_room_once_the_game_is_over():
+    # Regression: a finished room used to stay in self._rooms (and keep
+    # having its lease renewed below) for the rest of the process's life -
+    # nothing ever removed it once the engine reported game over.
+    async def scenario():
+        shard, nats_client, redis_client = make_shard(["wR . .", ". . .", "bK . ."])
+        register(redis_client, "conn-1")
+        register(redis_client, "conn-2")
+        await create_room(shard, "room1", [
+            {"connection_id": "conn-1", "username": "alice", "rating": 1200},
+            {"connection_id": "conn-2", "username": "bob", "rating": 1200},
+        ])
+        await send(shard, {
+            "kind": "command", "connection_id": "conn-1", "username": "alice", "rating": 1200,
+            "room_id": "room1", "raw": "MOVE a3 a1",  # 2 squares, captures bK
+        })
+        # Back-date the room's own clock so the next tick sees enough
+        # elapsed simulated time for the move to actually land.
+        shard._rooms["room1"]._last_tick -= 2 * settings.MOVE_DURATION / 1000 + 0.2
+
+        await shard.tick()
+
+        assert shard._rooms == {}
+        assert redis_client.get("room_owner:room1") is None
 
     run(scenario())
 

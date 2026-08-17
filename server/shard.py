@@ -177,10 +177,20 @@ class GameShard:
         """Advances every Room's real-time clock, then reports this
         instance's own liveness/capacity and renews every room_id lease it
         currently holds - see this module's own docstring for why both
-        matter once more than one Shard replica exists."""
+        matter once more than one Shard replica exists.
+
+        Also prunes any room that just finished: nothing else can happen in
+        a Room once its engine reports game over (no new move, no new
+        disconnect grace period), so it would otherwise sit in self._rooms
+        - and keep having its lease renewed below - for the rest of this
+        process's life. A finished room's own final broadcast already went
+        out from the room.tick() call above, before it's dropped here.
+        """
         now = time.monotonic()
-        for room in list(self._rooms.values()):
+        for room_id, room in list(self._rooms.items()):
             await room.tick(now)
+            if room.game_over:
+                del self._rooms[room_id]
         # self._redis is the plain synchronous redis.Redis client - run each
         # round-trip in a worker thread so it doesn't block this whole
         # Shard's event loop (every room/connection it's holding) while
@@ -235,7 +245,13 @@ class GameShard:
 
     async def _handle_disconnect(self, envelope: dict) -> None:
         room = self._rooms.get(envelope["room_id"])
-        proxy = self._proxies.get(envelope["connection_id"])
+        # Drop the cached proxy along with handling the disconnect itself -
+        # connection_ids are never reused (server/ws_server.py mints a fresh
+        # one, secrets.token_hex(8), per socket), so nothing will ever look
+        # this one up again; leaving it in self._proxies would just grow
+        # that dict for as long as this process runs. _proxy_for recreates
+        # one on demand if anything unexpected still asks for it.
+        proxy = self._proxies.pop(envelope["connection_id"], None)
         if room is not None and proxy is not None:
             await room.handle_disconnect(proxy)
 

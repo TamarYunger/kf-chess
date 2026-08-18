@@ -221,6 +221,18 @@ pip install -r requirements.txt pytest
 pytest
 ```
 
+## Load testing
+
+`loadtest/run.py` simulates concurrent players logging in, matching via
+PLAY, and exchanging commands against a running deployment (`docker
+compose up`, or any reachable one), reporting login/matchmaking/command
+round-trip latency and error counts - see `Server_Design.md`'s own
+Assumptions table, which this puts real numbers behind:
+
+```
+python -m loadtest.run --players 100 --duration 30
+```
+
 ## Repository
 
 https://github.com/TamarYunger/kf-chess (see header comment in `main.py`)

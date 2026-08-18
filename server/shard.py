@@ -154,14 +154,23 @@ class GameShard:
         """Advances every Room's real-time clock, then reports this
         instance's own liveness/capacity and renews every room_id lease it
         currently holds - see this module's own docstring for why both
-        matter once more than one Shard replica exists.
+        matter once more than one Shard replica exists. Also republishes
+        each active room's lobby-visible info (`active_room:{room_id}` ->
+        Room.room_info(), same TTL/cadence as the room_owner lease) so
+        server/api_gateway.py's GET /rooms can list currently-open rooms
+        without reaching into a live Room object in this process.
 
         Also prunes any room that just finished: nothing else can happen in
         a Room once its engine reports game over (no new move, no new
         disconnect grace period), so it would otherwise sit in self._rooms
-        - and keep having its lease renewed below - for the rest of this
-        process's life. A finished room's own final broadcast already went
-        out from the room.tick() call above, before it's dropped here.
+        - and keep having its lease/info renewed below - for the rest of
+        this process's life. A finished room's own final broadcast already
+        went out from the room.tick() call above, before it's dropped here;
+        its `active_room:` entry is simply left to expire on its own TTL
+        once this stops renewing it, rather than deleted explicitly - one
+        less Redis round-trip on the common path, at the cost of it
+        lingering in GET /rooms for up to PRESENCE_TTL_SECONDS after the
+        game actually ended.
         """
         now = time.monotonic()
         for room_id, room in list(self._rooms.items()):
@@ -175,9 +184,12 @@ class GameShard:
         await asyncio.to_thread(
             self._redis.setex, f"shard:heartbeat:{self._instance_id}", PRESENCE_TTL_SECONDS, len(self._rooms),
         )
-        for room_id in self._rooms:
+        for room_id, room in self._rooms.items():
             await asyncio.to_thread(
                 self._redis.setex, f"room_owner:{room_id}", PRESENCE_TTL_SECONDS, self._instance_id,
+            )
+            await asyncio.to_thread(
+                self._redis.setex, f"active_room:{room_id}", PRESENCE_TTL_SECONDS, json.dumps(room.room_info()),
             )
 
     async def handle_message(self, msg: object) -> None:

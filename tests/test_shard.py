@@ -352,6 +352,30 @@ def test_tick_heartbeats_this_instance_and_renews_every_room_lease():
     run(scenario())
 
 
+def test_tick_publishes_each_active_rooms_lobby_info_to_redis():
+    # server/api_gateway.py's GET /rooms reads active_room:{room_id} back -
+    # see Room.room_info for the shape.
+    async def scenario():
+        shard, nats_client, redis_client = make_shard(instance_id="instance-a")
+        register(redis_client, "conn-1")
+        register(redis_client, "conn-2")
+        await create_room(shard, "room1", [
+            {"connection_id": "conn-1", "username": "alice", "rating": 1200},
+            {"connection_id": "conn-2", "username": "bob", "rating": 1200},
+        ])
+
+        await shard.tick()
+
+        info = json.loads(redis_client.get("active_room:room1"))
+        assert info == {
+            "room_id": "room1", "players": {settings.COLORS[0]: "alice", settings.COLORS[1]: "bob"},
+            "started": True,
+        }
+        assert redis_client.ttl("active_room:room1") <= PRESENCE_TTL_SECONDS
+
+    run(scenario())
+
+
 def test_tick_heartbeats_zero_rooms_when_none_are_active():
     async def scenario():
         shard, nats_client, redis_client = make_shard(instance_id="instance-a")

@@ -5,13 +5,14 @@ env vars below, matching docker-compose.yml's postgres service by
 default); see .github/workflows/tests.yml for how CI starts one on the
 Windows runner's pre-installed PostgreSQL service.
 """
+import json
 import os
 import threading
 
 import psycopg2.extensions
 import pytest
 
-from server.db import DEFAULT_RATING, PostgresAccountStore
+from server.db import DEFAULT_RATING, PostgresAccountStore, PostgresGameStore
 
 
 class _ExplodingCursor:
@@ -64,6 +65,16 @@ def store():
     account_store._conn.commit()
     yield account_store
     account_store.close()
+
+
+@pytest.fixture
+def game_store():
+    store = PostgresGameStore(_dsn())
+    with store._conn.cursor() as cur:
+        cur.execute("TRUNCATE TABLE games")
+    store._conn.commit()
+    yield store
+    store.close()
 
 
 def test_first_login_creates_the_account_at_the_default_rating(store):
@@ -279,3 +290,60 @@ def test_concurrent_first_login_race_with_the_same_password_both_succeed(store):
 
     assert results["a"][0] is True
     assert results["b"][0] is True
+
+
+def test_game_store_reports_a_win_from_the_winners_own_perspective(game_store):
+    game_store.record_game("room1", "alice", "bob", "alice", started_at=1000.0, ended_at=1060.0, moves="{}")
+
+    [entry] = game_store.list_games_for_user("alice")
+    assert entry["room_id"] == "room1"
+    assert entry["opponent"] == "bob"
+    assert entry["color"] == "white"
+    assert entry["result"] == "win"
+
+
+def test_game_store_round_trips_the_move_history_as_json(game_store):
+    moves = {"w": [{"piece": "wP", "start": [6, 4], "end": [4, 4], "promoted_to": None}], "b": []}
+    game_store.record_game(
+        "room1", "alice", "bob", "alice", started_at=1000.0, ended_at=1060.0, moves=json.dumps(moves),
+    )
+
+    [entry] = game_store.list_games_for_user("alice")
+    assert entry["moves"] == moves
+
+
+def test_game_store_does_not_leave_an_open_transaction(game_store):
+    game_store.record_game("room1", "alice", "bob", "alice", started_at=1000.0, ended_at=1060.0, moves="{}")
+
+    game_store.list_games_for_user("alice")
+
+    assert game_store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+
+
+def test_game_store_record_game_rolls_back_and_recovers_after_a_failed_query(game_store):
+    real_conn = game_store._conn
+    game_store._conn = _ExplodingConnection(real_conn)
+    try:
+        with pytest.raises(psycopg2.OperationalError):
+            game_store.record_game("room1", "alice", "bob", "alice", started_at=1000.0, ended_at=1060.0, moves="{}")
+    finally:
+        game_store._conn = real_conn
+
+    assert game_store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+    game_store.record_game("room1", "alice", "bob", "alice", started_at=1000.0, ended_at=1060.0, moves="{}")
+    assert len(game_store.list_games_for_user("alice")) == 1
+
+
+def test_game_store_list_games_for_user_rolls_back_and_recovers_after_a_failed_query(game_store):
+    game_store.record_game("room1", "alice", "bob", "alice", started_at=1000.0, ended_at=1060.0, moves="{}")
+
+    real_conn = game_store._conn
+    game_store._conn = _ExplodingConnection(real_conn)
+    try:
+        with pytest.raises(psycopg2.OperationalError):
+            game_store.list_games_for_user("alice")
+    finally:
+        game_store._conn = real_conn
+
+    assert game_store._conn.get_transaction_status() == psycopg2.extensions.TRANSACTION_STATUS_IDLE
+    assert len(game_store.list_games_for_user("alice")) == 1  # connection must still work

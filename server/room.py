@@ -14,6 +14,7 @@ the same seat_or_view() - not two different seat-tracking structures for
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import time
@@ -31,7 +32,7 @@ from server.safe_send import Connection, safe_send
 
 if TYPE_CHECKING:
     from game.engine import GameEngine
-    from server.db import AccountStore
+    from server.db import AccountStore, GameStore
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,16 @@ DISCONNECT_GRACE_SECONDS = 20
 
 
 class Room:
-    def __init__(self, room_id: str, engine: GameEngine, colors: tuple[str, ...], accounts: AccountStore) -> None:
+    def __init__(
+        self, room_id: str, engine: GameEngine, colors: tuple[str, ...], accounts: AccountStore, games: GameStore,
+    ) -> None:
         self.room_id = room_id
         self._engine = engine
         self._board_height = engine.snapshot().height
         self._colors = tuple(colors)
         self._accounts = accounts
+        self._games = games
+        self._created_at = time.time()  # wall-clock, for the persisted game record below - _last_tick is monotonic
         self._viewers: set[Connection] = set()  # connections watching, never seated
         self._seats: dict[Connection, str] = {}  # connection -> color (currently connected AND seated)
         # color -> {"username", "rating"} - populated once seated and kept
@@ -95,6 +100,19 @@ class Room:
         the engine reports game over, nothing else here (a move, a
         disconnect grace period) can start again."""
         return self._engine.game_over
+
+    def room_info(self) -> dict:
+        """A lightweight snapshot of this room's lobby-visible state (who's
+        seated, whether it's started) - not game state, so not
+        encode_snapshot's job. server/shard.py's GameShard publishes this to
+        Redis every tick so GET /rooms (server/api_gateway.py) can list
+        currently-open rooms without reaching into a live Room object that
+        lives in a different process."""
+        return {
+            "room_id": self.room_id,
+            "players": {color: info["username"] for color, info in self._seat_info.items()},
+            "started": self._started,
+        }
 
     def seat_or_view(self, connection: Connection, username: str, rating: int) -> str:
         """The single way any connection becomes part of this room -
@@ -305,13 +323,15 @@ class Room:
                 await self._call_engine(self._engine.resign, color)
 
     def _on_game_over(self, payload: dict) -> None:
-        """Updates both seated players' Elo ratings once GameEngine reports
-        the game ended - a plain (synchronous) EventBus subscriber, not a
+        """Updates both seated players' Elo ratings and persists a record of
+        the finished game (see _record_game) once GameEngine reports the
+        game ended - a plain (synchronous) EventBus subscriber, not a
         coroutine, since EventBus.publish calls its handlers directly (this
         runs synchronously even when triggered from inside
         _resolve_disconnect_timeouts's own call to engine.resign).
-        A no-op if either color's info isn't known (nothing to rate) or
-        config.COLORS isn't exactly the two-player case Elo assumes.
+        A no-op if either color's info isn't known (nothing to rate/record)
+        or config.COLORS isn't exactly the two-player case Elo (and this
+        game record) assumes.
         """
         if len(self._colors) != 2:
             return
@@ -320,14 +340,31 @@ class Room:
         if info_a is None or info_b is None:
             return
 
-        score_a = 1.0 if payload.get("winner") == self._colors[0] else 0.0
+        winner = payload.get("winner")
+        score_a = 1.0 if winner == self._colors[0] else 0.0
         new_a, new_b = update_ratings(info_a["rating"], info_b["rating"], score_a)
         info_a["rating"], info_b["rating"] = new_a, new_b
         self._accounts.update_rating(info_a["username"], new_a)
         self._accounts.update_rating(info_b["username"], new_b)
         logger.info(
             "room %s: game over, winner=%s (%s -> %s, %s -> %s)",
-            self.room_id, payload.get("winner"), info_a["username"], new_a, info_b["username"], new_b,
+            self.room_id, winner, info_a["username"], new_a, info_b["username"], new_b,
+        )
+        self._record_game(winner, info_a["username"], info_b["username"])
+
+    def _record_game(self, winner_color: str | None, white_username: str, black_username: str) -> None:
+        """Persists this finished game's players, winner, timing, and full
+        move history - written once, right alongside the Elo update above,
+        into the same GameStore GET /history (server/api_gateway.py) reads
+        from."""
+        winner_username = {self._colors[0]: white_username, self._colors[1]: black_username}.get(winner_color)
+        move_history = self._engine.snapshot().move_history
+        moves = json.dumps({
+            color: [dataclasses.asdict(record) for record in records]
+            for color, records in move_history.items()
+        })
+        self._games.record_game(
+            self.room_id, white_username, black_username, winner_username, self._created_at, time.time(), moves,
         )
 
     def _on_arrival(self, event: object) -> None:

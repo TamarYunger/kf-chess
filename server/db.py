@@ -5,6 +5,7 @@ testable on its own with a plain temp-file or in-memory database.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
 import sqlite3
@@ -83,6 +84,85 @@ class AccountStore:
     def get_rating(self, username: str) -> int | None:
         row = self._conn.execute("SELECT rating FROM users WHERE username = ?", (username,)).fetchone()
         return row[0] if row else None
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+def _game_row_to_history_entry(row: tuple, username: str) -> dict:
+    """Shared by GameStore and PostgresGameStore - both query the same
+    seven columns in the same order, so there's one place that turns a raw
+    row into what GET /history (server/api_gateway.py) actually returns:
+    the requesting player's own color/opponent/result, not the raw
+    white/black columns a reader would have to cross-reference themselves."""
+    room_id, white_username, black_username, winner_username, started_at, ended_at, moves = row
+    is_white = username == white_username
+    if winner_username is None:
+        result = "draw"
+    else:
+        result = "win" if winner_username == username else "loss"
+    return {
+        "room_id": room_id,
+        "opponent": black_username if is_white else white_username,
+        "color": "white" if is_white else "black",
+        "result": result,
+        "started_at": started_at,
+        "ended_at": ended_at,
+        "moves": json.loads(moves),
+    }
+
+
+class GameStore:
+    """One row per completed game: both players' usernames, the winner (if
+    any), when it started/ended, and the full move history (JSON-encoded,
+    the same shape GameSnapshot.move_history already carries) - written
+    once, by server/room.py's Room._on_game_over, right alongside the
+    existing Elo update. GET /history (server/api_gateway.py) reads it back
+    via list_games_for_user.
+
+    No separate `moves` table: a game's move list is always read as one
+    unit together with the rest of that same game's row (GET /history never
+    queries "every move across every game" on its own), so normalizing it
+    into its own table would only add join overhead for no real benefit
+    here - same reasoning AccountStore keeps password_hash/salt as plain
+    columns instead of a separate credentials table.
+    """
+
+    def __init__(self, path: str = ":memory:") -> None:
+        self._conn = sqlite3.connect(path)
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS games ("
+            "room_id TEXT PRIMARY KEY, "
+            "white_username TEXT NOT NULL, "
+            "black_username TEXT NOT NULL, "
+            "winner_username TEXT, "
+            "started_at REAL NOT NULL, "
+            "ended_at REAL NOT NULL, "
+            "moves TEXT NOT NULL"
+            ")"
+        )
+        self._conn.commit()
+
+    def record_game(
+        self, room_id: str, white_username: str, black_username: str, winner_username: str | None,
+        started_at: float, ended_at: float, moves: str,
+    ) -> None:
+        self._conn.execute(
+            "INSERT INTO games "
+            "(room_id, white_username, black_username, winner_username, started_at, ended_at, moves) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (room_id, white_username, black_username, winner_username, started_at, ended_at, moves),
+        )
+        self._conn.commit()
+
+    def list_games_for_user(self, username: str, limit: int = 20) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT room_id, white_username, black_username, winner_username, started_at, ended_at, moves "
+            "FROM games WHERE white_username = ? OR black_username = ? "
+            "ORDER BY ended_at DESC LIMIT ?",
+            (username, username, limit),
+        ).fetchall()
+        return [_game_row_to_history_entry(row, username) for row in rows]
 
     def close(self) -> None:
         self._conn.close()
@@ -237,6 +317,70 @@ class PostgresAccountStore:
                 row = cur.fetchone()
                 self._conn.commit()  # read-only - see authenticate()'s own comment on why this still matters
                 return row[0] if row else None
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+class PostgresGameStore:
+    """Same two-method contract as GameStore (record_game/
+    list_games_for_user), backed by PostgreSQL instead of a local SQLite
+    file - for when more than one Game Server Shard needs to write to the
+    same game-history table. Same rollback-on-exception discipline as
+    PostgresAccountStore, for the same reason: this connection is
+    long-lived (one per process), so a failed query must not leave it
+    stuck "idle in transaction" for every later call too."""
+
+    def __init__(self, dsn: str) -> None:
+        import psycopg2
+
+        self._conn = psycopg2.connect(dsn)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS games ("
+                "room_id TEXT PRIMARY KEY, "
+                "white_username TEXT NOT NULL, "
+                "black_username TEXT NOT NULL, "
+                "winner_username TEXT, "
+                "started_at DOUBLE PRECISION NOT NULL, "
+                "ended_at DOUBLE PRECISION NOT NULL, "
+                "moves TEXT NOT NULL"
+                ")"
+            )
+        self._conn.commit()
+
+    def record_game(
+        self, room_id: str, white_username: str, black_username: str, winner_username: str | None,
+        started_at: float, ended_at: float, moves: str,
+    ) -> None:
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO games "
+                    "(room_id, white_username, black_username, winner_username, started_at, ended_at, moves) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (room_id, white_username, black_username, winner_username, started_at, ended_at, moves),
+                )
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def list_games_for_user(self, username: str, limit: int = 20) -> list[dict]:
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT room_id, white_username, black_username, winner_username, started_at, ended_at, moves "
+                    "FROM games WHERE white_username = %s OR black_username = %s "
+                    "ORDER BY ended_at DESC LIMIT %s",
+                    (username, username, limit),
+                )
+                rows = cur.fetchall()
+                self._conn.commit()  # read-only - see PostgresAccountStore.authenticate's own comment
+                return [_game_row_to_history_entry(row, username) for row in rows]
         except Exception:
             self._conn.rollback()
             raise

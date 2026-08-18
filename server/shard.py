@@ -60,7 +60,9 @@ from board.loaders import STANDARD_BOARD_TEXT
 from bus.event_bus import EventBus
 from config import settings
 from game.engine_factory import build_engine
-from server.db import AccountStore, PostgresAccountStore, build_postgres_dsn, build_redis_client
+from server.db import (
+    AccountStore, GameStore, PostgresAccountStore, PostgresGameStore, build_postgres_dsn, build_redis_client,
+)
 from server.health import start_health_server
 from server.inbox import handle_inbox_message
 from server.logging_config import configure_server_logging
@@ -97,14 +99,15 @@ PRESENCE_TTL_SECONDS = 10
 
 class GameShard:
     """Owns every Room, exactly like GameServer used to before the split.
-    `accounts` is only needed by Room itself (Elo updates on game_over) -
-    this class never checks a password (see server/api_gateway.py) or a
-    token (see server/ws_server.py's own _handle_auth) - both already
-    happened before a command ever reaches here. `instance_id` identifies
-    *this* Shard process/container - same role and default
-    (socket.gethostname()) as server/ws_server.py's GameServer, used both
-    for this instance's own inbox subject (see run_forever) and as the
-    value it heartbeats/leases into Redis (see tick()).
+    `accounts`/`games` are only needed by Room itself (Elo updates and game
+    history on game_over - see Room._on_game_over) - this class never
+    checks a password (see server/api_gateway.py) or a token (see
+    server/ws_server.py's own _handle_auth) - both already happened before
+    a command ever reaches here. `instance_id` identifies *this* Shard
+    process/container - same role and default (socket.gethostname()) as
+    server/ws_server.py's GameServer, used both for this instance's own
+    inbox subject (see run_forever) and as the value it heartbeats/leases
+    into Redis (see tick()).
     """
 
     def __init__(
@@ -113,6 +116,7 @@ class GameShard:
         redis_client: object,
         config: ModuleType = settings,
         accounts: AccountStore | None = None,
+        games: GameStore | None = None,
         board_lines: list[str] | None = None,
         instance_id: str | None = None,
     ) -> None:
@@ -123,6 +127,7 @@ class GameShard:
         self._board_lines = board_lines or STANDARD_BOARD_TEXT
         self._colors = tuple(config.COLORS)
         self._accounts = accounts if accounts is not None else AccountStore()
+        self._games = games if games is not None else GameStore()
         self._rooms: dict[str, Room] = {}  # room_id -> Room
         self._proxies: dict[str, NatsConnectionProxy] = {}  # connection_id -> proxy (one per connection, reused)
 
@@ -136,7 +141,7 @@ class GameShard:
     def _new_room(self, room_id: str) -> Room:
         events = EventBus()
         engine = build_engine(self._board_lines, self._config, events=events)
-        room = Room(room_id, engine, self._colors, self._accounts)
+        room = Room(room_id, engine, self._colors, self._accounts, self._games)
         self._rooms[room_id] = room
         return room
 
@@ -268,6 +273,7 @@ async def run_forever(
     redis_client: object,
     config: ModuleType = settings,
     accounts: AccountStore | None = None,
+    games: GameStore | None = None,
     board_lines: list[str] | None = None,
     on_ready: Callable | None = None,
     instance_id: str | None = None,
@@ -282,8 +288,8 @@ async def run_forever(
     `health_port=0` is how tests avoid colliding on the fixed default
     HEALTH_PORT across separate test runs."""
     instance_id = instance_id or socket.gethostname()
-    shard = GameShard(nats_client, redis_client, config=config, accounts=accounts, board_lines=board_lines,
-                       instance_id=instance_id)
+    shard = GameShard(nats_client, redis_client, config=config, accounts=accounts, games=games,
+                       board_lines=board_lines, instance_id=instance_id)
     await nats_client.subscribe(INBOX_SUBJECT_TEMPLATE.format(instance_id=instance_id), cb=shard.handle_message)
     health_runner = await start_health_server("0.0.0.0", health_port, shard.metrics)
     if on_ready is not None:
@@ -301,10 +307,14 @@ def main():  # pragma: no cover
     # for the same reason given there: each service is its own
     # composition root.
     if os.environ.get("DB_BACKEND", "sqlite") == "postgres":
-        accounts = PostgresAccountStore(build_postgres_dsn())
+        dsn = build_postgres_dsn()
+        accounts = PostgresAccountStore(dsn)
+        games = PostgresGameStore(dsn)
     else:
         from pathlib import Path
-        accounts = AccountStore(str(Path(__file__).resolve().parent / "accounts.db"))
+        accounts_dir = Path(__file__).resolve().parent
+        accounts = AccountStore(str(accounts_dir / "accounts.db"))
+        games = GameStore(str(accounts_dir / "games.db"))
 
     redis_client = build_redis_client()
 
@@ -313,7 +323,7 @@ def main():  # pragma: no cover
 
         nats_client = await nats.connect(os.environ["NATS_URL"])
         logger.info("starting KungFu Chess Game Shard, connected to %s", os.environ["NATS_URL"])
-        await run_forever(nats_client, redis_client, accounts=accounts)
+        await run_forever(nats_client, redis_client, accounts=accounts, games=games)
 
     asyncio.run(_main())
 

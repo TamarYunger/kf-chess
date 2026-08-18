@@ -5,7 +5,7 @@ import time
 
 from bus.event_bus import EventBus
 from config import settings
-from server.db import AccountStore
+from server.db import AccountStore, GameStore
 from server.protocol import parse_command
 from server.room import DISCONNECT_GRACE_SECONDS, Room
 from game.engine_factory import build_engine
@@ -26,9 +26,16 @@ def run(coro):
     return asyncio.run(coro)
 
 
-def make_room(rows=None, events=None, accounts=None, room_id="abc123"):
+def make_room(rows=None, events=None, accounts=None, games=None, room_id="abc123"):
     engine = build_engine(rows or ["wK . .", ". . .", "bK . ."], settings, events=events)
-    return Room(room_id, engine, settings.COLORS, accounts if accounts is not None else AccountStore()), engine
+    return (
+        Room(
+            room_id, engine, settings.COLORS,
+            accounts if accounts is not None else AccountStore(),
+            games if games is not None else GameStore(),
+        ),
+        engine,
+    )
 
 
 def test_first_seat_or_view_gets_the_first_color():
@@ -61,6 +68,23 @@ def test_third_seat_or_view_becomes_a_viewer():
 
     assert role == "viewer"
     assert carol in room._viewers
+
+
+def test_room_info_reports_seated_players_and_started_state():
+    room, engine = make_room(room_id="xyz789")
+    assert room.room_info() == {"room_id": "xyz789", "players": {}, "started": False}
+
+    room.seat_or_view(FakeConnection(), "alice", 1200)
+    assert room.room_info() == {
+        "room_id": "xyz789", "players": {settings.COLORS[0]: "alice"}, "started": False,
+    }
+
+    room.seat_or_view(FakeConnection(), "bob", 1250)
+    assert room.room_info() == {
+        "room_id": "xyz789",
+        "players": {settings.COLORS[0]: "alice", settings.COLORS[1]: "bob"},
+        "started": True,
+    }
 
 
 def test_welcome_sends_room_confirmation_then_snapshot():
@@ -447,6 +471,37 @@ def test_game_over_updates_both_ratings_via_the_shared_events_bus():
     run(scenario())
 
 
+def test_game_over_records_a_game_history_entry_for_both_players():
+    async def scenario():
+        events = EventBus()
+        games = GameStore()
+        room, engine = make_room(["wR . .", ". . .", "bK . ."], events=events, games=games)
+        alice = FakeConnection()
+        bob = FakeConnection()
+        role_alice = room.seat_or_view(alice, "alice", 1200)
+        room.seat_or_view(bob, "bob", 1200)
+
+        engine.request_move((0, 0), (2, 0))  # rook captures the other king
+        engine.wait(3 * settings.MOVE_DURATION)
+
+        winner_username = "alice" if role_alice == engine._winner else "bob"
+        loser_username = "bob" if winner_username == "alice" else "alice"
+        [winner_entry] = games.list_games_for_user(winner_username)
+        [loser_entry] = games.list_games_for_user(loser_username)
+        assert winner_entry["room_id"] == "abc123"
+        assert winner_entry["result"] == "win"
+        assert winner_entry["opponent"] == loser_username
+        assert loser_entry["result"] == "loss"
+        assert loser_entry["opponent"] == winner_username
+        # Both sides see the same underlying game - same recorded moves,
+        # from each one's own room_id/moves point of view.
+        assert winner_entry["room_id"] == loser_entry["room_id"]
+        assert winner_entry["moves"] == loser_entry["moves"]
+        assert any(winner_entry["moves"].values())  # the capturing move was recorded
+
+    run(scenario())
+
+
 def test_game_over_property_reflects_the_engine():
     room, engine = make_room(["wR . .", ". . .", "bK . ."])
     assert room.game_over is False
@@ -527,29 +582,34 @@ def test_handle_command_flushes_an_event_that_became_due_between_ticks():
 def test_on_game_over_is_a_noop_when_colors_isnt_the_two_player_case():
     # _on_game_over assumes exactly two colors (Elo is a two-player rating) -
     # a room configured with any other color count must not blow up or
-    # touch accounts when the engine it wraps reports game_over.
+    # touch accounts/games when the engine it wraps reports game_over.
     engine = build_engine(["wK . .", ". . .", ". . ."], settings)
     accounts = AccountStore()
-    Room("room1", engine, colors=("w",), accounts=accounts)
+    games = GameStore()
+    Room("room1", engine, colors=("w",), accounts=accounts, games=games)
 
     engine.events.publish("game_over", {"winner": "w"})  # must not raise
 
     assert accounts.get_rating("w") is None  # never looked up, let alone written
+    assert games.list_games_for_user("w") == []  # never recorded
 
 
 def test_on_game_over_is_a_noop_when_a_seat_was_never_filled():
     # A game_over reported before both colors are ever seated (e.g. the
     # engine's own win condition fires while a room is still waiting for a
-    # second player) has nothing to rate - only one seat's info is known.
+    # second player) has nothing to rate/record - only one seat's info is
+    # known.
     events = EventBus()
     accounts = AccountStore()
-    room, engine = make_room(["wK . .", ". . .", "bK . ."], events=events, accounts=accounts)
+    games = GameStore()
+    room, engine = make_room(["wK . .", ". . .", "bK . ."], events=events, accounts=accounts, games=games)
     accounts.authenticate("alice", "pw1")
     room.seat_or_view(FakeConnection(), "alice", 1200)
 
     engine.events.publish("game_over", {"winner": "w"})  # must not raise
 
     assert accounts.get_rating("alice") == 1200  # untouched
+    assert games.list_games_for_user("alice") == []  # never recorded
 
 
 def test_notify_room_started_is_a_noop_when_no_one_is_left_to_notify():
